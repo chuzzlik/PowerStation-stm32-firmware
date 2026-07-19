@@ -39,12 +39,12 @@ void CoolingController::update() {
 
         state.powerSensorValid = readTemperature(
             Config::PIN_NTC_POWER,
-            Config::NTC_POWER_OFFSET_C,
+            Config::NTC_POWER_R25_OHM,
             powerTemperatureC
         );
         state.airSensorValid = readTemperature(
             Config::PIN_NTC_AIR,
-            Config::NTC_AIR_OFFSET_C,
+            Config::NTC_AIR_R25_OHM,
             airTemperatureC
         );
 
@@ -84,7 +84,7 @@ CoolingState CoolingController::getState() const {
 
 bool CoolingController::readTemperature(
     uint8_t pin,
-    float offsetC,
+    float nominalResistanceOhm,
     float &temperatureC
 ) const {
     uint32_t rawSum = 0;
@@ -113,13 +113,13 @@ bool CoolingController::readTemperature(
 
     float nominalKelvin = Config::NTC_NOMINAL_TEMPERATURE_C + 273.15f;
     float inverseKelvin = 1.0f / nominalKelvin
-        + logf(ntcResistance / Config::NTC_NOMINAL_RESISTANCE_OHM) / Config::NTC_BETA;
+        + logf(ntcResistance / nominalResistanceOhm) / Config::NTC_BETA;
 
     if (!isfinite(inverseKelvin) || inverseKelvin <= 0.0f) {
         return false;
     }
 
-    temperatureC = 1.0f / inverseKelvin - 273.15f + offsetC;
+    temperatureC = 1.0f / inverseKelvin - 273.15f;
 
     return isfinite(temperatureC)
         && temperatureC >= Config::NTC_MIN_PLAUSIBLE_C
