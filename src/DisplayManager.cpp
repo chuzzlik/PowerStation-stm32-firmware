@@ -27,7 +27,6 @@ bool DisplayManager::begin(TwoWire *smallWire) {
     return mainOk && smallOk;
 }
 
-
 void DisplayManager::setSmallDisplayOn(bool on) {
     if (smallDisplayOn == on) {
         return;
@@ -114,8 +113,6 @@ void DisplayManager::renderSmall(
         systemState == SystemState::Off
         && battery.powerState == PowerState::Idle;
 
-    // Верхняя строка: ETA слева, направление/состояние справа.
-    // Шрифт и горизонтальное выравнивание сохранены, строка прижата к верху.
     smallDisplay.setTextSize(1);
 
     String topLeftText;
@@ -148,11 +145,8 @@ void DisplayManager::renderSmall(
         smallDisplay.print(topRightText);
     }
 
-    // Средняя строка: индикатор заряда и направления потока энергии.
     drawSmallBatteryBar(battery.socPercent, battery.powerState, animationFrame);
 
-    // Нижняя строка: заряд слева, мощность справа.
-    // Крупный шрифт сохранён, строка прижата к нижнему краю дисплея.
     smallDisplay.setTextSize(2);
     smallDisplay.setCursor(0, 18);
     smallDisplay.print(String(battery.socPercent, 0));
@@ -168,12 +162,15 @@ void DisplayManager::renderSmall(
             bottomRightText = "OFF";
         }
     } else {
-        bottomRightText = formatSmallPowerW(battery.powerW);
+        float displayPowerW = updateSmallDisplayPower(
+            battery.powerW,
+            battery.powerState,
+            millis()
+        );
+        bottomRightText = formatSmallPowerW(displayPowerW);
     }
 
     if (bottomRightText.length() > 0) {
-        // Пока BLE выключен, мощность прижата к правому краю.
-        // При включённом BLE справа резервируется место под мигающую иконку.
         const int16_t rightEdge = bluetoothEnabled ? 114 : 127;
         int16_t textX = 0;
         int16_t textY = 0;
@@ -196,6 +193,7 @@ void DisplayManager::renderMain(
     const BatteryState &battery,
     const BatteryConfig &batteryConfig,
     const UiConfig &uiConfig,
+    const CoolingState &cooling,
     bool bluetoothEnabled,
     bool bluetoothConnected
 ) {
@@ -210,7 +208,7 @@ void DisplayManager::renderMain(
 
     switch (page) {
         case MainPage::BatPower:
-            renderBatPowerPage(battery);
+            renderBatPowerPage(battery, cooling);
             break;
 
         case MainPage::CapacityLearn:
@@ -227,6 +225,44 @@ void DisplayManager::renderMain(
     }
 
     mainDisplay.display();
+}
+
+float DisplayManager::updateSmallDisplayPower(
+    float powerW,
+    PowerState powerState,
+    uint32_t nowMs
+) {
+    if (powerState == PowerState::Idle || fabsf(powerW) < 1.0f) {
+        smallPowerFilterReady = true;
+        smallPowerFilterState = powerState;
+        smallPowerFilteredW = 0.0f;
+        lastSmallPowerFilterMs = nowMs;
+        return 0.0f;
+    }
+
+    if (!smallPowerFilterReady || smallPowerFilterState != powerState) {
+        smallPowerFilterReady = true;
+        smallPowerFilterState = powerState;
+        smallPowerFilteredW = powerW;
+        lastSmallPowerFilterMs = nowMs;
+        return smallPowerFilteredW;
+    }
+
+    float dtSeconds = lastSmallPowerFilterMs == 0
+        ? static_cast<float>(Config::DISPLAY_REFRESH_MS) / 1000.0f
+        : static_cast<float>(nowMs - lastSmallPowerFilterMs) / 1000.0f;
+    dtSeconds = clampFloat(dtSeconds, 0.001f, 2.0f);
+    lastSmallPowerFilterMs = nowMs;
+
+    float deltaW = fabsf(powerW - smallPowerFilteredW);
+    float tauSeconds = deltaW >= Config::SMALL_POWER_FAST_DELTA_W
+        ? Config::SMALL_POWER_FAST_TAU_SECONDS
+        : Config::SMALL_POWER_SMOOTH_TAU_SECONDS;
+
+    float alpha = 1.0f - expf(-dtSeconds / tauSeconds);
+    smallPowerFilteredW += alpha * (powerW - smallPowerFilteredW);
+
+    return smallPowerFilteredW;
 }
 
 void DisplayManager::drawSmallBatteryBar(float socPercent, PowerState powerState, uint8_t animationFrame) {
@@ -251,8 +287,6 @@ void DisplayManager::drawSmallBatteryBar(float socPercent, PowerState powerState
         return;
     }
 
-    // Во время зарядки по заполненной части проходит широкая тёмная полоса.
-    // Она заметнее мелких стрелок с расстояния и не затрагивает пустую часть шкалы.
     constexpr int BAND_WIDTH = 10;
     constexpr int STEP_PIXELS = 3;
 
@@ -275,7 +309,6 @@ void DisplayManager::drawSmallBatteryBar(float socPercent, PowerState powerState
 }
 
 void DisplayManager::drawSmallBluetoothIcon(int x, int y) {
-    // Стилизованный Bluetooth-символ размером 8x15 пикселей.
     smallDisplay.drawLine(x + 3, y, x + 3, y + 14, 1);
     smallDisplay.drawLine(x + 3, y, x + 7, y + 4, 1);
     smallDisplay.drawLine(x + 7, y + 4, x + 1, y + 10, 1);
@@ -283,16 +316,10 @@ void DisplayManager::drawSmallBluetoothIcon(int x, int y) {
     smallDisplay.drawLine(x + 7, y + 10, x + 3, y + 14, 1);
 }
 
-void DisplayManager::renderBatPowerPage(const BatteryState &battery) {
-    mainDisplay.println("BAT / POWER");
-
-    mainDisplay.print("State:   ");
-    mainDisplay.println(powerStateToText(battery.powerState));
-
-    mainDisplay.print("SOC:     ");
-    mainDisplay.print(String(battery.socPercent, 0));
-    mainDisplay.println("%");
-
+void DisplayManager::renderBatPowerPage(
+    const BatteryState &battery,
+    const CoolingState &cooling
+) {
     mainDisplay.print("Volt:    ");
     mainDisplay.print(String(battery.voltageV, 2));
     mainDisplay.println("V");
@@ -305,8 +332,29 @@ void DisplayManager::renderBatPowerPage(const BatteryState &battery) {
     mainDisplay.print(String(fabsf(battery.powerW), 1));
     mainDisplay.println("W");
 
-    mainDisplay.print("Time:    ");
-    mainDisplay.println(formatDurationForPage(battery.estimatedTimeHours));
+    mainDisplay.print("T power: ");
+    if (cooling.powerSensorValid) {
+        mainDisplay.print(String(cooling.powerTemperatureC, 1));
+        mainDisplay.println("C");
+    } else {
+        mainDisplay.println("ERR");
+    }
+
+    mainDisplay.print("T air:   ");
+    if (cooling.airSensorValid) {
+        mainDisplay.print(String(cooling.airTemperatureC, 1));
+        mainDisplay.println("C");
+    } else {
+        mainDisplay.println("ERR");
+    }
+
+    mainDisplay.print("Fan:     ");
+    mainDisplay.print(cooling.fanPercent);
+    mainDisplay.print('%');
+
+    if (cooling.fault) {
+        mainDisplay.print(" FAIL");
+    }
 }
 
 void DisplayManager::renderCapacityLearnPage(const BatteryState &battery, const BatteryConfig &batteryConfig) {
@@ -341,6 +389,10 @@ void DisplayManager::renderSettingsPage(const BatteryConfig &batteryConfig, cons
     mainDisplay.print("Low cut:   ");
     mainDisplay.print(String(batteryConfig.lowCutVoltageV, 1));
     mainDisplay.println("V");
+
+    mainDisplay.print("Charge eff:");
+    mainDisplay.print(String(batteryConfig.chargeEfficiency * 100.0f, 0));
+    mainDisplay.println("% auto");
 
     mainDisplay.print("Power lim: ");
     mainDisplay.print(String(batteryConfig.powerLimitW, 0));
