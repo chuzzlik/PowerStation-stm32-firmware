@@ -3,10 +3,6 @@
 #include "Utils.h"
 #include <math.h>
 
-namespace {
-    constexpr uint8_t FAN_PWM_CHANNEL = 7;
-}
-
 void CoolingController::begin() {
     pinMode(Config::PIN_FAN_PWM, OUTPUT);
     digitalWrite(Config::PIN_FAN_PWM, LOW);
@@ -16,12 +12,12 @@ void CoolingController::begin() {
     analogSetPinAttenuation(Config::PIN_NTC_AIR, ADC_11db);
 
     ledcSetup(
-        FAN_PWM_CHANNEL,
+        Config::FAN_PWM_CHANNEL,
         Config::FAN_PWM_FREQUENCY_HZ,
         Config::FAN_PWM_RESOLUTION_BITS
     );
-    ledcAttachPin(Config::PIN_FAN_PWM, FAN_PWM_CHANNEL);
-    ledcWrite(FAN_PWM_CHANNEL, 0);
+    ledcAttachPin(Config::PIN_FAN_PWM, Config::FAN_PWM_CHANNEL);
+    ledcWrite(Config::FAN_PWM_CHANNEL, 0);
 
     lastSensorReadMs = millis() - Config::NTC_REFRESH_MS;
     lastFanUpdateMs = millis();
@@ -41,8 +37,16 @@ void CoolingController::update() {
         float powerTemperatureC = NAN;
         float airTemperatureC = NAN;
 
-        state.powerSensorValid = readTemperature(Config::PIN_NTC_POWER, powerTemperatureC);
-        state.airSensorValid = readTemperature(Config::PIN_NTC_AIR, airTemperatureC);
+        state.powerSensorValid = readTemperature(
+            Config::PIN_NTC_POWER,
+            Config::NTC_POWER_OFFSET_C,
+            powerTemperatureC
+        );
+        state.airSensorValid = readTemperature(
+            Config::PIN_NTC_AIR,
+            Config::NTC_AIR_OFFSET_C,
+            airTemperatureC
+        );
 
         if (state.powerSensorValid) {
             state.powerTemperatureC = smoothTemperature(
@@ -78,7 +82,11 @@ CoolingState CoolingController::getState() const {
     return state;
 }
 
-bool CoolingController::readTemperature(uint8_t pin, float &temperatureC) const {
+bool CoolingController::readTemperature(
+    uint8_t pin,
+    float offsetC,
+    float &temperatureC
+) const {
     uint32_t rawSum = 0;
 
     for (uint8_t i = 0; i < 4; i++) {
@@ -111,7 +119,7 @@ bool CoolingController::readTemperature(uint8_t pin, float &temperatureC) const 
         return false;
     }
 
-    temperatureC = 1.0f / inverseKelvin - 273.15f;
+    temperatureC = 1.0f / inverseKelvin - 273.15f + offsetC;
 
     return isfinite(temperatureC)
         && temperatureC >= Config::NTC_MIN_PLAUSIBLE_C
@@ -220,7 +228,7 @@ void CoolingController::writeFanPercent(float percent) {
         ? 0
         : static_cast<uint8_t>(roundf(percent * 255.0f / 100.0f));
 
-    ledcWrite(FAN_PWM_CHANNEL, duty);
+    ledcWrite(Config::FAN_PWM_CHANNEL, duty);
 
     state.fanPercent = static_cast<uint8_t>(roundf(percent));
     state.fanOn = duty > 0;
