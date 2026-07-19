@@ -3,6 +3,10 @@
 #include "Utils.h"
 #include <math.h>
 
+namespace {
+    constexpr uint8_t FAN_PWM_CHANNEL = 7;
+}
+
 void CoolingController::begin() {
     pinMode(Config::PIN_FAN_PWM, OUTPUT);
     digitalWrite(Config::PIN_FAN_PWM, LOW);
@@ -11,9 +15,13 @@ void CoolingController::begin() {
     analogSetPinAttenuation(Config::PIN_NTC_POWER, ADC_11db);
     analogSetPinAttenuation(Config::PIN_NTC_AIR, ADC_11db);
 
-    analogWriteResolution(Config::PIN_FAN_PWM, Config::FAN_PWM_RESOLUTION_BITS);
-    analogWriteFrequency(Config::PIN_FAN_PWM, Config::FAN_PWM_FREQUENCY_HZ);
-    analogWrite(Config::PIN_FAN_PWM, 0);
+    ledcSetup(
+        FAN_PWM_CHANNEL,
+        Config::FAN_PWM_FREQUENCY_HZ,
+        Config::FAN_PWM_RESOLUTION_BITS
+    );
+    ledcAttachPin(Config::PIN_FAN_PWM, FAN_PWM_CHANNEL);
+    ledcWrite(FAN_PWM_CHANNEL, 0);
 
     lastSensorReadMs = millis() - Config::NTC_REFRESH_MS;
     lastFanUpdateMs = millis();
@@ -212,7 +220,7 @@ void CoolingController::writeFanPercent(float percent) {
         ? 0
         : static_cast<uint8_t>(roundf(percent * 255.0f / 100.0f));
 
-    analogWrite(Config::PIN_FAN_PWM, duty);
+    ledcWrite(FAN_PWM_CHANNEL, duty);
 
     state.fanPercent = static_cast<uint8_t>(roundf(percent));
     state.fanOn = duty > 0;
