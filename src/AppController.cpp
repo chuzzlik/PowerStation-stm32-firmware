@@ -870,7 +870,7 @@ String AppController::makeSettingsJson() {
     BatteryConfig config = batteryMeter.getConfig();
 
     String json;
-    json.reserve(520);
+    json.reserve(512);
     json = "{\"type\":\"settings\",";
     json += "\"apiVersion\":6,";
     json += "\"nominalCapacityWh\":" + String(config.nominalCapacityWh, 3) + ",";
@@ -878,7 +878,6 @@ String AppController::makeSettingsJson() {
     json += "\"fullVoltageV\":" + String(config.fullVoltageV, 3) + ",";
     json += "\"fullCurrentA\":" + String(config.fullCurrentA, 3) + ",";
     json += "\"chargeEfficiency\":" + String(config.chargeEfficiency, 3) + ",";
-    json += "\"chargeEfficiencyAuto\":true,";
     json += "\"lowSocPercent\":" + String(config.lowSocPercent, 2) + ",";
     json += "\"criticalSocPercent\":" + String(config.criticalSocPercent, 2) + ",";
     json += "\"learningEndVoltageV\":" + String(config.learningEndVoltageV, 3) + ",";
