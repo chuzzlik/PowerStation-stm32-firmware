@@ -5,7 +5,10 @@
 #include <esp_system.h>
 
 void AppController::begin() {
-    // Максимально рано держим MOSFET выключенным после железного включателя.
+    // Максимально рано оставляем выключенными силовой выход и вентилятор.
+    pinMode(Config::PIN_FAN_PWM, OUTPUT);
+    digitalWrite(Config::PIN_FAN_PWM, LOW);
+
     pinMode(Config::PIN_MOSFET_OUTPUT, OUTPUT);
     digitalWrite(
         Config::PIN_MOSFET_OUTPUT,
@@ -32,9 +35,9 @@ void AppController::begin() {
 
     const esp_reset_reason_t resetReason = esp_reset_reason();
     const bool restoreAfterUnexpectedReset =
-            persistentData.systemWasOn
-            && resetReason != ESP_RST_POWERON
-            && resetReason != ESP_RST_EXT;
+        persistentData.systemWasOn
+        && resetReason != ESP_RST_POWERON
+        && resetReason != ESP_RST_EXT;
 
     Serial.print("Reset reason: ");
     Serial.println(static_cast<int>(resetReason));
@@ -71,6 +74,7 @@ void AppController::begin() {
     mosfetOutput.begin(Config::PIN_MOSFET_OUTPUT);
     buttons.begin();
     statusLed.begin(Config::PIN_POWER_LED);
+    cooling.begin();
 
     xTaskCreatePinnedToCore(
         AppController::ledTask,
@@ -103,11 +107,9 @@ void AppController::begin() {
     smallDisplayOn = true;
     mainDisplayOn = false;
 
-    // После обычного включения питания показываем OFF 2 секунды.
-    // После аварийного рестарта сразу возвращаем рабочую индикацию.
     smallDisplayPreviewUntilMs = restoreAfterUnexpectedReset
-                                     ? 0
-                                     : now + Config::SMALL_SCREEN_OFF_PREVIEW_MS;
+        ? 0
+        : now + Config::SMALL_SCREEN_OFF_PREVIEW_MS;
 
     lastSmallDisplayActivityMs = now;
     lastMainDisplayActivityMs = now;
@@ -139,19 +141,19 @@ void AppController::ledTask(void *param) {
 }
 
 void AppController::update() {
+    cooling.update();
     readButtons();
     readPowerData();
 
     updatePowerState();
     updateSystemProtection();
-
     updateBluetooth();
 
     updateSmallDisplayState();
     updateMainDisplayState();
 
-    updateLed(); // <-- поднять выше
-    renderDisplaysIfNeeded(); // <-- ниже
+    updateLed();
+    renderDisplaysIfNeeded();
     updateSaving();
 }
 
@@ -186,11 +188,9 @@ void AppController::scanI2C(TwoWire &wire, const char *name) {
 void AppController::readButtons() {
     ButtonEvent event = buttons.update();
 
-    if (event == ButtonEvent::None) {
-        return;
+    if (event != ButtonEvent::None) {
+        handleButtonEvent(event);
     }
-
-    handleButtonEvent(event);
 }
 
 void AppController::readPowerData() {
@@ -221,6 +221,11 @@ void AppController::readPowerData() {
 
     PowerSample sample = powerSensor.read();
     batteryMeter.update(sample);
+
+    if (batteryMeter.consumeConfigChanged()) {
+        requestForceSave();
+        setLastEvent("CHARGE EFF AUTO");
+    }
 }
 
 void AppController::updatePowerState() {
@@ -228,15 +233,13 @@ void AppController::updatePowerState() {
     previousPowerState = powerState;
     powerState = batteryMeter.getState().powerState;
 
-    if (powerState != previousPowerState) {
-        if (
-            systemState == SystemState::On &&
-            previousPowerState == PowerState::Idle &&
-            (powerState == PowerState::Charge || powerState == PowerState::Discharge)
-        ) {
-            wakeSmallDisplay();
-        }
-
+    if (
+        powerState != previousPowerState
+        && systemState == SystemState::On
+        && previousPowerState == PowerState::Idle
+        && (powerState == PowerState::Charge || powerState == PowerState::Discharge)
+    ) {
+        wakeSmallDisplay();
     }
 
     const bool chargeInputDetectedNow =
@@ -254,10 +257,10 @@ void AppController::updatePowerState() {
     }
 
     if (
-        systemState == SystemState::Off &&
-        autoPowerOnPending &&
-        chargeInputDetected &&
-        now - autoPowerOnStartedMs >= Config::AUTO_POWER_ON_CHARGE_DELAY_MS
+        systemState == SystemState::Off
+        && autoPowerOnPending
+        && chargeInputDetected
+        && now - autoPowerOnStartedMs >= Config::AUTO_POWER_ON_CHARGE_DELAY_MS
     ) {
         autoPowerOnPending = false;
         powerSystemOn("AUTO CHARGE");
@@ -316,11 +319,7 @@ void AppController::updateSmallDisplayState() {
         return;
     }
 
-    if (powerState != PowerState::Idle) {
-        return;
-    }
-
-    if (smallDisplayOn && now - lastSmallDisplayActivityMs > timeoutMs) {
+    if (powerState == PowerState::Idle && smallDisplayOn && now - lastSmallDisplayActivityMs > timeoutMs) {
         sleepSmallDisplay();
     }
 }
@@ -367,6 +366,7 @@ void AppController::renderDisplaysIfNeeded() {
         battery,
         config,
         persistentData.uiConfig,
+        cooling.getState(),
         ble.isEnabled(),
         ble.isConnected()
     );
@@ -374,6 +374,8 @@ void AppController::renderDisplaysIfNeeded() {
 
 void AppController::updateBluetooth() {
     ble.update();
+
+    uint32_t now = millis();
     bluetoothConnected = ble.isConnected();
 
     if (bluetoothConnected != previousBluetoothConnected) {
@@ -383,6 +385,39 @@ void AppController::updateBluetooth() {
             setLastEvent(bluetoothConnected ? "BLE CONN" : "BLE DISC");
             wakeMainDisplay(MainPage::Bluetooth, true);
         }
+
+        bleWaitingStartedMs = bluetoothConnected ? 0 : now;
+    }
+
+    if (!ble.isEnabled()) {
+        bleWaitingStartedMs = 0;
+        return;
+    }
+
+    if (bluetoothConnected) {
+        bleWaitingStartedMs = 0;
+        return;
+    }
+
+    if (bleWaitingStartedMs == 0) {
+        bleWaitingStartedMs = now;
+    }
+
+    if (now - bleWaitingStartedMs < Config::BLE_WAITING_TIMEOUT_MS) {
+        return;
+    }
+
+    ble.disable();
+    previousBluetoothConnected = false;
+    bleWaitingStartedMs = 0;
+    setLastEvent("BLE TIMEOUT");
+
+    if (mainPage == MainPage::Bluetooth) {
+        mainPage = MainPage::BatPower;
+    }
+
+    if (mainDisplayOn) {
+        wakeMainDisplay(mainPage, true);
     }
 }
 
@@ -433,7 +468,6 @@ void AppController::handlePowerShort() {
         return;
     }
 
-    // SYSTEM_OFF: только краткий просмотр батареи, MOSFET не трогать.
     wakeSmallDisplay();
     smallDisplayPreviewUntilMs = millis() + Config::SMALL_SCREEN_OFF_PREVIEW_MS;
 }
@@ -460,28 +494,6 @@ void AppController::handleScreenShort() {
     wakeMainDisplayCurrentPage();
 }
 
-// void AppController::handleScreenShort() {
-//     if (mosfetOutput.isEnabled()) {
-//         mosfetOutput.disable();
-//     } else {
-//         mosfetOutput.enable();
-//     }
-//
-//     bool mosfetOn = mosfetOutput.isEnabled();
-//     int gpioLevel = digitalRead(Config::PIN_MOSFET_OUTPUT);
-//
-//     Serial.print("MOSFET TEST: ");
-//     Serial.print(mosfetOn ? "ON" : "OFF");
-//
-//     Serial.print(" | GPIO");
-//     Serial.print(Config::PIN_MOSFET_OUTPUT);
-//     Serial.print("=");
-//     Serial.print(gpioLevel == HIGH ? "HIGH" : "LOW");
-//
-//     Serial.print(" | activeHigh=");
-//     Serial.println(Config::MOSFET_ACTIVE_HIGH ? "true" : "false");
-// }
-
 void AppController::handleScreenLong() {
     if (systemState == SystemState::Off) {
         return;
@@ -490,6 +502,7 @@ void AppController::handleScreenLong() {
     if (!ble.isEnabled()) {
         ble.enable();
         previousBluetoothConnected = false;
+        bleWaitingStartedMs = millis();
 
         setLastEvent("BLE ON");
         wakeSmallDisplay();
@@ -499,6 +512,7 @@ void AppController::handleScreenLong() {
 
     ble.disable();
     previousBluetoothConnected = false;
+    bleWaitingStartedMs = 0;
     setLastEvent("BLE OFF");
 
     if (mainPage == MainPage::Bluetooth) {
@@ -521,6 +535,7 @@ void AppController::powerSystemOn(const char *eventName) {
     batteryMeter.clearOutputDisabledByProtection();
     systemState = SystemState::On;
     persistentData.systemWasOn = true;
+
     requestForceSave();
     updateSaving();
 
@@ -550,6 +565,7 @@ void AppController::powerSystemOff() {
 
     ble.disable();
     previousBluetoothConnected = false;
+    bleWaitingStartedMs = 0;
 }
 
 void AppController::shutdownByProtection(const String &eventName) {
@@ -557,12 +573,10 @@ void AppController::shutdownByProtection(const String &eventName) {
     autoPowerOnPending = false;
     batteryMeter.markOutputDisabledByProtection();
 
-    requestForceSave();
-    updateSaving();
-
     mosfetOutput.disable();
     systemState = SystemState::Off;
     persistentData.systemWasOn = false;
+
     requestForceSave();
     updateSaving();
 
@@ -771,11 +785,12 @@ void AppController::handleBleCommand(const String &command) {
 String AppController::makeStatusJson() {
     BatteryState battery = batteryMeter.getState();
     BatteryServiceInfo service = batteryMeter.getServiceInfo();
+    CoolingState thermal = cooling.getState();
 
     String json;
-    json.reserve(480);
+    json.reserve(500);
     json = "{\"type\":\"status\",";
-    json += "\"apiVersion\":5,";
+    json += "\"apiVersion\":6,";
     json += "\"firmwareVersion\":\"" + String(Config::FIRMWARE_VERSION) + "\",";
     json += "\"systemState\":\"";
     json += systemState == SystemState::On ? "ON" : "OFF";
@@ -792,6 +807,12 @@ String AppController::makeStatusJson() {
     json += "\"learningActive\":" + String(battery.learningActive ? "true" : "false") + ",";
     json += "\"learningDischargeWh\":" + String(battery.learningDischargeWh, 3) + ",";
     json += "\"learnedCycles\":" + String(service.learnedCycles) + ",";
+    json += "\"tempPowerC\":";
+    json += thermal.powerSensorValid ? String(thermal.powerTemperatureC, 2) : "null";
+    json += ",\"tempAirC\":";
+    json += thermal.airSensorValid ? String(thermal.airTemperatureC, 2) : "null";
+    json += ",\"fanPercent\":" + String(thermal.fanPercent) + ",";
+    json += "\"thermalFault\":" + String(thermal.fault ? "true" : "false") + ",";
     json += "\"mosfetEnabled\":" + String(mosfetOutput.isEnabled() ? "true" : "false") + ",";
     json += "\"bluetoothEnabled\":" + String(ble.isEnabled() ? "true" : "false") + ",";
     json += "\"bluetoothConnected\":" + String(ble.isConnected() ? "true" : "false");
@@ -804,14 +825,15 @@ String AppController::makeSettingsJson() {
     BatteryConfig config = batteryMeter.getConfig();
 
     String json;
-    json.reserve(560);
+    json.reserve(500);
     json = "{\"type\":\"settings\",";
-    json += "\"apiVersion\":5,";
+    json += "\"apiVersion\":6,";
     json += "\"nominalCapacityWh\":" + String(config.nominalCapacityWh, 3) + ",";
     json += "\"lowCutVoltageV\":" + String(config.lowCutVoltageV, 3) + ",";
     json += "\"fullVoltageV\":" + String(config.fullVoltageV, 3) + ",";
     json += "\"fullCurrentA\":" + String(config.fullCurrentA, 3) + ",";
     json += "\"chargeEfficiency\":" + String(config.chargeEfficiency, 3) + ",";
+    json += "\"chargeEfficiencyAuto\":true,";
     json += "\"lowSocPercent\":" + String(config.lowSocPercent, 2) + ",";
     json += "\"criticalSocPercent\":" + String(config.criticalSocPercent, 2) + ",";
     json += "\"learningEndVoltageV\":" + String(config.learningEndVoltageV, 3) + ",";
@@ -889,11 +911,6 @@ bool AppController::handleSetCommand(const String &expression, String &error) {
         batteryMeter.setConfig(c);
         return true;
     }
-    if (key == "chargeEfficiency") {
-        c.chargeEfficiency = clampFloat(floatValue, 0.50f, 1.0f);
-        batteryMeter.setConfig(c);
-        return true;
-    }
     if (key == "lowSocPercent") {
         c.lowSocPercent = clampFloat(floatValue, 0.0f, 100.0f);
         batteryMeter.setConfig(c);
@@ -953,6 +970,8 @@ bool AppController::handleSetCommand(const String &expression, String &error) {
         return true;
     }
 
-    error = "unknown_setting";
+    error = key == "chargeEfficiency"
+        ? "read_only_auto_setting"
+        : "unknown_setting";
     return false;
 }
