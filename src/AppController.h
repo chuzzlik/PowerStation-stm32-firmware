@@ -12,10 +12,12 @@
 #include "StatusLed.h"
 #include "DisplayManager.h"
 #include "BlePowerService.h"
+#include "CoolingController.h"
 
 class AppController {
     static void ledTask(void *param);
     TaskHandle_t ledTaskHandle = nullptr;
+
 public:
     void begin();
     void update();
@@ -36,6 +38,7 @@ private:
     StatusLed statusLed;
     DisplayManager displays;
     BlePowerService ble;
+    CoolingController cooling;
 
     PersistentData persistentData;
     SaveConfig saveConfig;
@@ -51,6 +54,7 @@ private:
 
     bool bluetoothConnected = false;
     bool previousBluetoothConnected = false;
+    uint32_t bleWaitingStartedMs = 0;
 
     MainPage mainPage = MainPage::BatPower;
 
