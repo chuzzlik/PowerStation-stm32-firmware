@@ -7,6 +7,7 @@
 
 #include "Config.h"
 #include "Types.h"
+#include "CoolingController.h"
 #include "SmallOled128x32.h"
 
 class DisplayManager {
@@ -35,6 +36,7 @@ public:
         const BatteryState &battery,
         const BatteryConfig &batteryConfig,
         const UiConfig &uiConfig,
+        const CoolingState &cooling,
         bool bluetoothEnabled,
         bool bluetoothConnected
     );
@@ -55,10 +57,16 @@ private:
     bool mainOk = false;
     bool smallOk = false;
 
+    bool smallPowerFilterReady = false;
+    PowerState smallPowerFilterState = PowerState::Idle;
+    float smallPowerFilteredW = 0.0f;
+    uint32_t lastSmallPowerFilterMs = 0;
+
+    float updateSmallDisplayPower(float powerW, PowerState powerState, uint32_t nowMs);
     void drawSmallBatteryBar(float socPercent, PowerState powerState, uint8_t animationFrame);
     void drawSmallBluetoothIcon(int x, int y);
 
-    void renderBatPowerPage(const BatteryState &battery);
+    void renderBatPowerPage(const BatteryState &battery, const CoolingState &cooling);
     void renderCapacityLearnPage(const BatteryState &battery, const BatteryConfig &batteryConfig);
     void renderSettingsPage(const BatteryConfig &batteryConfig, const UiConfig &uiConfig);
     void renderBluetoothPage(bool bluetoothEnabled, bool bluetoothConnected);
