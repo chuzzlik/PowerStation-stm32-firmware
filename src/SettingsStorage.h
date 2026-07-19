@@ -9,6 +9,10 @@ public:
     void begin();
     PersistentData load();
     void save(const PersistentData &data);
+
+    uint32_t loadSystemIdleTimeoutSec(uint32_t defaultValue);
+    void saveSystemIdleTimeoutSec(uint32_t value);
+
     void reset();
 
 private:
