@@ -26,6 +26,14 @@ void SettingsStorage::save(const PersistentData &data) {
     prefs.putBytes("data", &data, sizeof(PersistentData));
 }
 
+uint32_t SettingsStorage::loadSystemIdleTimeoutSec(uint32_t defaultValue) {
+    return prefs.getUInt("sysIdleSec", defaultValue);
+}
+
+void SettingsStorage::saveSystemIdleTimeoutSec(uint32_t value) {
+    prefs.putUInt("sysIdleSec", value);
+}
+
 void SettingsStorage::reset() {
     prefs.clear();
 }
