@@ -3,7 +3,7 @@
 #include <Arduino.h>
 
 namespace Config {
-    constexpr const char *FIRMWARE_VERSION = "2.6.0";
+    constexpr const char *FIRMWARE_VERSION = "2.6.1";
 
     constexpr uint8_t PIN_NONE = 255;
 
@@ -38,8 +38,11 @@ namespace Config {
     constexpr uint8_t PIN_MOSFET_OUTPUT = 21;
 
     constexpr uint8_t PIN_FAN_PWM = 13;
-    constexpr uint8_t PIN_NTC_POWER = 1;
-    constexpr uint8_t PIN_NTC_AIR = 2;
+
+    // Медный NTC на радиаторе подключён к GPIO2,
+    // пластиковый NTC на выходе воздуха — к GPIO1.
+    constexpr uint8_t PIN_NTC_POWER = 2;
+    constexpr uint8_t PIN_NTC_AIR = 1;
 
     // Большинство таких MOSFET-модулей бывают active-low: LOW = включено, HIGH = выключено.
     // Если после прошивки логика окажется обратной, поменять на true.
@@ -63,6 +66,10 @@ namespace Config {
     constexpr uint32_t BUTTON_DEBOUNCE_MS = 40;
     constexpr uint32_t BUTTON_LONG_PRESS_MS = 900;
 
+    // Светодиод и вентилятор используют разные LEDC-каналы.
+    constexpr uint8_t LED_PWM_CHANNEL = 6;
+    constexpr uint32_t LED_PWM_FREQUENCY_HZ = 5000;
+    constexpr uint8_t LED_PWM_RESOLUTION_BITS = 8;
     constexpr uint8_t LED_MAX_BRIGHTNESS = 255;
 
     // Сглаживание только показания мощности на маленьком OLED.
@@ -80,6 +87,7 @@ namespace Config {
     constexpr uint32_t FULL_CHARGE_HOLD_MS = 30000;
 
     // Вентилятор 12 В через IRL3705.
+    constexpr uint8_t FAN_PWM_CHANNEL = 7;
     constexpr uint32_t FAN_PWM_FREQUENCY_HZ = 250;
     constexpr uint8_t FAN_PWM_RESOLUTION_BITS = 8;
     constexpr float FAN_MIN_PERCENT = 50.0f;
@@ -101,6 +109,12 @@ namespace Config {
     constexpr float NTC_MAX_PLAUSIBLE_C = 150.0f;
     constexpr uint32_t NTC_REFRESH_MS = 250;
     constexpr float NTC_SMOOTH_TAU_SECONDS = 1.5f;
+
+    // Одноточечная калибровка при фактической температуре помещения 21.4 °C.
+    // После перестановки пинов медный датчик ранее показывал 26.6 °C,
+    // пластиковый — 24.8 °C.
+    constexpr float NTC_POWER_OFFSET_C = -5.2f;
+    constexpr float NTC_AIR_OFFSET_C = -3.4f;
 
     constexpr const char *BLE_NAME = "PowerBank";
 }
