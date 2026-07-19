@@ -3,7 +3,7 @@
 #include <Arduino.h>
 
 namespace Config {
-    constexpr const char *FIRMWARE_VERSION = "2.5.1-ble-api";
+    constexpr const char *FIRMWARE_VERSION = "2.6.0";
 
     constexpr uint8_t PIN_NONE = 255;
 
@@ -37,6 +37,10 @@ namespace Config {
     constexpr uint8_t PIN_SCREEN_BUTTON = 12;
     constexpr uint8_t PIN_MOSFET_OUTPUT = 21;
 
+    constexpr uint8_t PIN_FAN_PWM = 13;
+    constexpr uint8_t PIN_NTC_POWER = 1;
+    constexpr uint8_t PIN_NTC_AIR = 2;
+
     // Большинство таких MOSFET-модулей бывают active-low: LOW = включено, HIGH = выключено.
     // Если после прошивки логика окажется обратной, поменять на true.
     constexpr bool MOSFET_ACTIVE_HIGH = true;
@@ -52,13 +56,51 @@ namespace Config {
     constexpr uint32_t DISPLAY_REFRESH_MS = 200;
     constexpr uint32_t ANIMATION_REFRESH_MS = 200;
     constexpr uint32_t BLE_NOTIFY_MS = 1000;
+    constexpr uint32_t BLE_WAITING_TIMEOUT_MS = 5UL * 60UL * 1000UL;
     constexpr uint16_t BLE_MTU = 517;
-    constexpr size_t BLE_MAX_VALUE_BYTES = 500;
+    constexpr size_t BLE_MAX_VALUE_BYTES = 512;
 
     constexpr uint32_t BUTTON_DEBOUNCE_MS = 40;
     constexpr uint32_t BUTTON_LONG_PRESS_MS = 900;
 
     constexpr uint8_t LED_MAX_BRIGHTNESS = 255;
+
+    // Сглаживание только показания мощности на маленьком OLED.
+    constexpr float SMALL_POWER_SMOOTH_TAU_SECONDS = 1.6f;
+    constexpr float SMALL_POWER_FAST_TAU_SECONDS = 0.35f;
+    constexpr float SMALL_POWER_FAST_DELTA_W = 25.0f;
+
+    // Автоматическая калибровка КПД зарядки.
+    constexpr float CHARGE_EFFICIENCY_MIN = 0.50f;
+    constexpr float CHARGE_EFFICIENCY_MAX = 1.00f;
+    constexpr float CHARGE_EFFICIENCY_ALPHA = 0.25f;
+    constexpr float CHARGE_CALIBRATION_MIN_CAPACITY_PERCENT = 10.0f;
+    constexpr float CHARGE_CALIBRATION_MIN_INPUT_WH = 20.0f;
+    constexpr float CHARGE_SOC_RESERVE_PERCENT = 0.5f;
+    constexpr uint32_t FULL_CHARGE_HOLD_MS = 30000;
+
+    // Вентилятор 12 В через IRL3705.
+    constexpr uint32_t FAN_PWM_FREQUENCY_HZ = 250;
+    constexpr uint8_t FAN_PWM_RESOLUTION_BITS = 8;
+    constexpr float FAN_MIN_PERCENT = 50.0f;
+    constexpr float FAN_START_PERCENT = 100.0f;
+    constexpr uint32_t FAN_START_BOOST_MS = 1000;
+    constexpr float FAN_OFF_TEMPERATURE_C = 38.0f;
+    constexpr float FAN_ON_TEMPERATURE_C = 42.0f;
+    constexpr float FAN_FULL_TEMPERATURE_C = 60.0f;
+    constexpr float FAN_RAMP_PERCENT_PER_SECOND = 25.0f;
+
+    // NTC 10k B3950. Делитель: постоянный резистор к 3.3 В, NTC к GND.
+    constexpr float NTC_NOMINAL_RESISTANCE_OHM = 10000.0f;
+    constexpr float NTC_FIXED_RESISTANCE_OHM = 10000.0f;
+    constexpr float NTC_BETA = 3950.0f;
+    constexpr float NTC_NOMINAL_TEMPERATURE_C = 25.0f;
+    constexpr uint16_t NTC_ADC_MAX = 4095;
+    constexpr uint16_t NTC_ADC_FAULT_MARGIN = 8;
+    constexpr float NTC_MIN_PLAUSIBLE_C = -20.0f;
+    constexpr float NTC_MAX_PLAUSIBLE_C = 150.0f;
+    constexpr uint32_t NTC_REFRESH_MS = 250;
+    constexpr float NTC_SMOOTH_TAU_SECONDS = 1.5f;
 
     constexpr const char *BLE_NAME = "PowerBank";
 }
