@@ -3,7 +3,7 @@
 #include <Arduino.h>
 
 namespace Config {
-    constexpr const char *FIRMWARE_VERSION = "2.6.2";
+    constexpr const char *FIRMWARE_VERSION = "2.6.3";
 
     constexpr uint8_t PIN_NONE = 255;
 
@@ -100,22 +100,22 @@ namespace Config {
     constexpr float FAN_FULL_TEMPERATURE_C = 60.0f;
     constexpr float FAN_RAMP_PERCENT_PER_SECOND = 25.0f;
 
-    // NTC 10k B3950. Делитель: постоянный резистор к 3.3 В, NTC к GND.
-    constexpr float NTC_NOMINAL_RESISTANCE_OHM = 10000.0f;
+    // NTC B3950. Делитель: постоянный резистор 10 кОм к 3.3 В, NTC к GND.
     constexpr float NTC_FIXED_RESISTANCE_OHM = 10000.0f;
     constexpr float NTC_BETA = 3950.0f;
     constexpr float NTC_NOMINAL_TEMPERATURE_C = 25.0f;
+
+    // Эффективные R25 рассчитаны по сопротивлению при 21.4 °C:
+    // Tpower = 11.41 кОм, Tair = 10.63 кОм.
+    constexpr float NTC_POWER_R25_OHM = 9704.0f;
+    constexpr float NTC_AIR_R25_OHM = 9041.0f;
+
     constexpr uint16_t NTC_ADC_MAX = 4095;
     constexpr uint16_t NTC_ADC_FAULT_MARGIN = 8;
     constexpr float NTC_MIN_PLAUSIBLE_C = -20.0f;
     constexpr float NTC_MAX_PLAUSIBLE_C = 150.0f;
     constexpr uint32_t NTC_REFRESH_MS = 250;
     constexpr float NTC_SMOOTH_TAU_SECONDS = 1.5f;
-
-    // Скорректировано по повторному измерению при температуре помещения 21.4 °C:
-    // Tpower = 19.4 °C, Tair = 23.5 °C.
-    constexpr float NTC_POWER_OFFSET_C = -3.2f;
-    constexpr float NTC_AIR_OFFSET_C = -5.5f;
 
     constexpr const char *BLE_NAME = "PowerBank";
 }
