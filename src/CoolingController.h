@@ -33,7 +33,7 @@ private:
     float targetFanPercent = 0.0f;
     float actualFanPercent = 0.0f;
 
-    bool readTemperature(uint8_t pin, float &temperatureC) const;
+    bool readTemperature(uint8_t pin, float offsetC, float &temperatureC) const;
     float smoothTemperature(float previousC, float currentC, float dtSeconds, bool &ready) const;
     float calculateTargetFanPercent(float temperatureC) const;
     void updateFan(uint32_t nowMs);
