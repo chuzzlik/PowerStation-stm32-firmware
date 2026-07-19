@@ -32,6 +32,10 @@ void AppController::begin() {
 
     storage.begin();
     persistentData = storage.load();
+    systemIdleTimeoutSec = min(
+        storage.loadSystemIdleTimeoutSec(Config::SYSTEM_IDLE_TIMEOUT_DEFAULT_SEC),
+        Config::SYSTEM_IDLE_TIMEOUT_MAX_SEC
+    );
 
     const esp_reset_reason_t resetReason = esp_reset_reason();
     const bool restoreAfterUnexpectedReset =
@@ -104,6 +108,8 @@ void AppController::begin() {
         mosfetOutput.disable();
     }
 
+    systemIdleStartedMs = systemState == SystemState::On ? now : 0;
+
     smallDisplayOn = true;
     mainDisplayOn = false;
 
@@ -147,6 +153,7 @@ void AppController::update() {
 
     updatePowerState();
     updateSystemProtection();
+    updateSystemIdleTimeout();
     updateBluetooth();
 
     updateSmallDisplayState();
@@ -189,6 +196,7 @@ void AppController::readButtons() {
     ButtonEvent event = buttons.update();
 
     if (event != ButtonEvent::None) {
+        markSystemActivity();
         handleButtonEvent(event);
     }
 }
@@ -290,6 +298,37 @@ void AppController::updateSystemProtection() {
 
     if (lowBySoc || lowByVoltage) {
         shutdownByProtection("LOW BAT");
+    }
+}
+
+void AppController::updateSystemIdleTimeout() {
+    if (systemState != SystemState::On || systemIdleTimeoutSec == 0) {
+        systemIdleStartedMs = 0;
+        return;
+    }
+
+    if (powerState != PowerState::Idle) {
+        systemIdleStartedMs = 0;
+        return;
+    }
+
+    uint32_t now = millis();
+
+    if (systemIdleStartedMs == 0) {
+        systemIdleStartedMs = now;
+        return;
+    }
+
+    uint32_t timeoutMs = systemIdleTimeoutSec * 1000UL;
+
+    if (now - systemIdleStartedMs >= timeoutMs) {
+        powerSystemOff("AUTO IDLE");
+    }
+}
+
+void AppController::markSystemActivity() {
+    if (systemState == SystemState::On) {
+        systemIdleStartedMs = millis();
     }
 }
 
@@ -535,6 +574,7 @@ void AppController::powerSystemOn(const char *eventName) {
     batteryMeter.clearOutputDisabledByProtection();
     systemState = SystemState::On;
     persistentData.systemWasOn = true;
+    systemIdleStartedMs = millis();
 
     requestForceSave();
     updateSaving();
@@ -543,9 +583,10 @@ void AppController::powerSystemOn(const char *eventName) {
     wakeMainDisplay(MainPage::BatPower, true);
 }
 
-void AppController::powerSystemOff() {
+void AppController::powerSystemOff(const char *eventName) {
     smallDisplayPreviewUntilMs = 0;
     autoPowerOnPending = false;
+    systemIdleStartedMs = 0;
 
     displays.playPowerOffAnimation();
 
@@ -553,7 +594,7 @@ void AppController::powerSystemOff() {
     systemState = SystemState::Off;
     persistentData.systemWasOn = false;
 
-    setLastEvent("POWER OFF");
+    setLastEvent(eventName);
 
     requestForceSave();
     updateSaving();
@@ -571,6 +612,7 @@ void AppController::powerSystemOff() {
 void AppController::shutdownByProtection(const String &eventName) {
     smallDisplayPreviewUntilMs = 0;
     autoPowerOnPending = false;
+    systemIdleStartedMs = 0;
     batteryMeter.markOutputDisabledByProtection();
 
     mosfetOutput.disable();
@@ -661,6 +703,7 @@ void AppController::savePersistentData() {
     persistentData.totalChargeWh = service.totalChargeWh;
 
     storage.save(persistentData);
+    storage.saveSystemIdleTimeoutSec(systemIdleTimeoutSec);
 
     Serial.println("Saved");
 }
@@ -719,6 +762,8 @@ void AppController::handleBleCommand(const String &command) {
         sendBleResult("", false, "empty_command");
         return;
     }
+
+    markSystemActivity();
 
     Serial.print("BLE CMD: ");
     Serial.println(cmd);
@@ -825,7 +870,7 @@ String AppController::makeSettingsJson() {
     BatteryConfig config = batteryMeter.getConfig();
 
     String json;
-    json.reserve(500);
+    json.reserve(520);
     json = "{\"type\":\"settings\",";
     json += "\"apiVersion\":6,";
     json += "\"nominalCapacityWh\":" + String(config.nominalCapacityWh, 3) + ",";
@@ -845,7 +890,8 @@ String AppController::makeSettingsJson() {
     json += "\"etaMinPowerW\":" + String(config.etaMinPowerW, 2) + ",";
     json += "\"etaMaxHours\":" + String(config.etaMaxHours, 2) + ",";
     json += "\"smallScreenTimeoutSec\":" + String(persistentData.uiConfig.smallScreenTimeoutSec) + ",";
-    json += "\"mainScreenTimeoutSec\":" + String(persistentData.uiConfig.mainScreenTimeoutSec);
+    json += "\"mainScreenTimeoutSec\":" + String(persistentData.uiConfig.mainScreenTimeoutSec) + ",";
+    json += "\"systemIdleTimeoutSec\":" + String(systemIdleTimeoutSec);
     json += "}";
 
     return json;
@@ -967,6 +1013,15 @@ bool AppController::handleSetCommand(const String &expression, String &error) {
     }
     if (key == "mainScreenTimeoutSec") {
         persistentData.uiConfig.mainScreenTimeoutSec = static_cast<uint16_t>(constrain(intValue, 5, 3600));
+        return true;
+    }
+    if (key == "systemIdleTimeoutSec") {
+        systemIdleTimeoutSec = static_cast<uint32_t>(clampFloat(
+            floatValue,
+            0.0f,
+            static_cast<float>(Config::SYSTEM_IDLE_TIMEOUT_MAX_SEC)
+        ));
+        markSystemActivity();
         return true;
     }
 
