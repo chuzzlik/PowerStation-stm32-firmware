@@ -3,7 +3,7 @@
 #include <Arduino.h>
 
 namespace Config {
-    constexpr const char *FIRMWARE_VERSION = "2.6.1";
+    constexpr const char *FIRMWARE_VERSION = "2.6.2";
 
     constexpr uint8_t PIN_NONE = 255;
 
@@ -53,6 +53,8 @@ namespace Config {
     constexpr uint32_t SMALL_SCREEN_OFF_PREVIEW_MS = 2000;
     constexpr float AUTO_POWER_ON_MIN_CHARGE_W = 1.0f;
     constexpr uint32_t AUTO_POWER_ON_CHARGE_DELAY_MS = 1000;
+    constexpr uint32_t SYSTEM_IDLE_TIMEOUT_DEFAULT_SEC = 15UL * 60UL;
+    constexpr uint32_t SYSTEM_IDLE_TIMEOUT_MAX_SEC = 24UL * 60UL * 60UL;
     constexpr uint32_t ETA_DISPLAY_REFRESH_MS = 10000;
 
     constexpr uint32_t SENSOR_REFRESH_MS = 250;
@@ -110,11 +112,10 @@ namespace Config {
     constexpr uint32_t NTC_REFRESH_MS = 250;
     constexpr float NTC_SMOOTH_TAU_SECONDS = 1.5f;
 
-    // Одноточечная калибровка при фактической температуре помещения 21.4 °C.
-    // После перестановки пинов медный датчик ранее показывал 26.6 °C,
-    // пластиковый — 24.8 °C.
-    constexpr float NTC_POWER_OFFSET_C = -5.2f;
-    constexpr float NTC_AIR_OFFSET_C = -3.4f;
+    // Скорректировано по повторному измерению при температуре помещения 21.4 °C:
+    // Tpower = 19.4 °C, Tair = 23.5 °C.
+    constexpr float NTC_POWER_OFFSET_C = -3.2f;
+    constexpr float NTC_AIR_OFFSET_C = -5.5f;
 
     constexpr const char *BLE_NAME = "PowerBank";
 }
