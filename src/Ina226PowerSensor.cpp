@@ -52,7 +52,7 @@ PowerSample Ina226PowerSensor::read() {
     uint16_t rawBus = readRegister(0x02);
 
     float shuntVoltageV = rawShunt * 0.0000025f; // 2.5 uV per bit.
-    float busVoltageV = rawBus * 0.00125f;       // 1.25 mV per bit.
+    float busVoltageV = rawBus * 0.00125f / 1.05f; // Компенсация измеренного завышения на 5%.
 
     float currentA = 0.0f;
 
