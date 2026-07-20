@@ -3,7 +3,9 @@
 #include "Utils.h"
 #include <math.h>
 
-void CoolingController::begin() {
+void CoolingController::begin(const CoolingConfig &config) {
+    setConfig(config);
+
     pinMode(Config::PIN_FAN_PWM, OUTPUT);
     digitalWrite(Config::PIN_FAN_PWM, LOW);
 
@@ -82,6 +84,55 @@ CoolingState CoolingController::getState() const {
     return state;
 }
 
+CoolingConfig CoolingController::getConfig() const {
+    return config;
+}
+
+void CoolingController::setConfig(const CoolingConfig &config) {
+    CoolingConfig next = config;
+
+    next.fanMinPercent = clampFloat(
+        next.fanMinPercent,
+        Config::FAN_MIN_PERCENT_MIN,
+        Config::FAN_MIN_PERCENT_MAX
+    );
+    next.fanStartPercent = clampFloat(
+        next.fanStartPercent,
+        Config::FAN_START_PERCENT_MIN,
+        Config::FAN_START_PERCENT_MAX
+    );
+    next.fanStartBoostMs = constrain(
+        next.fanStartBoostMs,
+        Config::FAN_START_BOOST_MIN_MS,
+        Config::FAN_START_BOOST_MAX_MS
+    );
+    next.fanOffTemperatureC = clampFloat(
+        next.fanOffTemperatureC,
+        Config::FAN_TEMPERATURE_MIN_C,
+        Config::FAN_TEMPERATURE_MAX_C
+    );
+    next.fanOnTemperatureC = clampFloat(
+        next.fanOnTemperatureC,
+        Config::FAN_TEMPERATURE_MIN_C,
+        Config::FAN_TEMPERATURE_MAX_C
+    );
+    next.fanFullTemperatureC = clampFloat(
+        next.fanFullTemperatureC,
+        Config::FAN_TEMPERATURE_MIN_C,
+        Config::FAN_TEMPERATURE_MAX_C
+    );
+
+    if (
+        next.fanStartPercent < next.fanMinPercent
+        || next.fanOffTemperatureC >= next.fanOnTemperatureC
+        || next.fanOnTemperatureC >= next.fanFullTemperatureC
+    ) {
+        next = CoolingConfig();
+    }
+
+    this->config = next;
+}
+
 bool CoolingController::readTemperature(
     uint8_t pin,
     float nominalResistanceOhm,
@@ -142,19 +193,19 @@ float CoolingController::smoothTemperature(
 }
 
 float CoolingController::calculateTargetFanPercent(float temperatureC) const {
-    if (temperatureC >= Config::FAN_FULL_TEMPERATURE_C) {
+    if (temperatureC >= config.fanFullTemperatureC) {
         return 100.0f;
     }
 
-    if (temperatureC <= Config::FAN_ON_TEMPERATURE_C) {
-        return Config::FAN_MIN_PERCENT;
+    if (temperatureC <= config.fanOnTemperatureC) {
+        return config.fanMinPercent;
     }
 
-    float rangeC = Config::FAN_FULL_TEMPERATURE_C - Config::FAN_ON_TEMPERATURE_C;
-    float position = (temperatureC - Config::FAN_ON_TEMPERATURE_C) / rangeC;
+    float rangeC = config.fanFullTemperatureC - config.fanOnTemperatureC;
+    float position = (temperatureC - config.fanOnTemperatureC) / rangeC;
 
-    return Config::FAN_MIN_PERCENT
-        + position * (100.0f - Config::FAN_MIN_PERCENT);
+    return config.fanMinPercent
+        + position * (100.0f - config.fanMinPercent);
 }
 
 void CoolingController::updateFan(uint32_t nowMs) {
@@ -175,9 +226,9 @@ void CoolingController::updateFan(uint32_t nowMs) {
 
     float controlTemperatureC = state.powerTemperatureC;
 
-    if (controlTemperatureC >= Config::FAN_ON_TEMPERATURE_C) {
+    if (controlTemperatureC >= config.fanOnTemperatureC) {
         fanRequested = true;
-    } else if (controlTemperatureC < Config::FAN_OFF_TEMPERATURE_C) {
+    } else if (controlTemperatureC < config.fanOffTemperatureC) {
         fanRequested = false;
     }
 
@@ -193,15 +244,15 @@ void CoolingController::updateFan(uint32_t nowMs) {
 
     if (actualFanPercent <= 0.0f && !startupBoostActive) {
         startupBoostActive = true;
-        startupBoostUntilMs = nowMs + Config::FAN_START_BOOST_MS;
-        actualFanPercent = Config::FAN_START_PERCENT;
+        startupBoostUntilMs = nowMs + config.fanStartBoostMs;
+        actualFanPercent = config.fanStartPercent;
         writeFanPercent(actualFanPercent);
         return;
     }
 
     if (startupBoostActive) {
         if (static_cast<int32_t>(nowMs - startupBoostUntilMs) < 0) {
-            actualFanPercent = Config::FAN_START_PERCENT;
+            actualFanPercent = config.fanStartPercent;
             writeFanPercent(actualFanPercent);
             return;
         }
@@ -217,7 +268,7 @@ void CoolingController::updateFan(uint32_t nowMs) {
         actualFanPercent = max(actualFanPercent - maxStep, targetFanPercent);
     }
 
-    actualFanPercent = clampFloat(actualFanPercent, Config::FAN_MIN_PERCENT, 100.0f);
+    actualFanPercent = clampFloat(actualFanPercent, config.fanMinPercent, 100.0f);
     writeFanPercent(actualFanPercent);
 }
 

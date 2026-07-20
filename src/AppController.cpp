@@ -3,6 +3,13 @@
 #include "Utils.h"
 #include <math.h>
 #include <esp_system.h>
+#include <stdlib.h>
+
+namespace {
+    bool isWholeNumber(float value) {
+        return floorf(value) == value;
+    }
+}
 
 void AppController::begin() {
     // Максимально рано оставляем выключенными силовой выход и вентилятор.
@@ -32,6 +39,13 @@ void AppController::begin() {
 
     storage.begin();
     persistentData = storage.load();
+    coolingConfig = storage.loadCoolingConfig();
+    if (!Config::isScreenTimeoutAllowed(persistentData.uiConfig.smallScreenTimeoutSec)) {
+        persistentData.uiConfig.smallScreenTimeoutSec = UiConfig().smallScreenTimeoutSec;
+    }
+    if (!Config::isScreenTimeoutAllowed(persistentData.uiConfig.mainScreenTimeoutSec)) {
+        persistentData.uiConfig.mainScreenTimeoutSec = UiConfig().mainScreenTimeoutSec;
+    }
     systemIdleTimeoutSec = min(
         storage.loadSystemIdleTimeoutSec(Config::SYSTEM_IDLE_TIMEOUT_DEFAULT_SEC),
         Config::SYSTEM_IDLE_TIMEOUT_MAX_SEC
@@ -78,7 +92,8 @@ void AppController::begin() {
     mosfetOutput.begin(Config::PIN_MOSFET_OUTPUT);
     buttons.begin();
     statusLed.begin(Config::PIN_POWER_LED);
-    cooling.begin();
+    cooling.begin(coolingConfig);
+    coolingConfig = cooling.getConfig();
 
     xTaskCreatePinnedToCore(
         AppController::ledTask,
@@ -233,6 +248,10 @@ void AppController::readPowerData() {
     if (batteryMeter.consumeConfigChanged()) {
         requestForceSave();
         setLastEvent("CHARGE EFF AUTO");
+
+        if (ble.isEnabled()) {
+            ble.notifySettings(makeSettingsJson());
+        }
     }
 }
 
@@ -703,6 +722,7 @@ void AppController::savePersistentData() {
     persistentData.totalChargeWh = service.totalChargeWh;
 
     storage.save(persistentData);
+    storage.saveCoolingConfig(coolingConfig);
     storage.saveSystemIdleTimeoutSec(systemIdleTimeoutSec);
 
     Serial.println("Saved");
@@ -835,7 +855,7 @@ String AppController::makeStatusJson() {
     String json;
     json.reserve(500);
     json = "{\"type\":\"status\",";
-    json += "\"apiVersion\":6,";
+    json += "\"apiVersion\":" + String(Config::API_VERSION) + ",";
     json += "\"firmwareVersion\":\"" + String(Config::FIRMWARE_VERSION) + "\",";
     json += "\"systemState\":\"";
     json += systemState == SystemState::On ? "ON" : "OFF";
@@ -872,25 +892,24 @@ String AppController::makeSettingsJson() {
     String json;
     json.reserve(512);
     json = "{\"type\":\"settings\",";
-    json += "\"apiVersion\":6,";
-    json += "\"nominalCapacityWh\":" + String(config.nominalCapacityWh, 3) + ",";
+    json += "\"apiVersion\":" + String(Config::API_VERSION) + ",";
     json += "\"lowCutVoltageV\":" + String(config.lowCutVoltageV, 3) + ",";
     json += "\"fullVoltageV\":" + String(config.fullVoltageV, 3) + ",";
     json += "\"fullCurrentA\":" + String(config.fullCurrentA, 3) + ",";
     json += "\"chargeEfficiency\":" + String(config.chargeEfficiency, 3) + ",";
     json += "\"lowSocPercent\":" + String(config.lowSocPercent, 2) + ",";
-    json += "\"criticalSocPercent\":" + String(config.criticalSocPercent, 2) + ",";
-    json += "\"learningEndVoltageV\":" + String(config.learningEndVoltageV, 3) + ",";
-    json += "\"learningMinDischargeWh\":" + String(config.learningMinDischargeWh, 2) + ",";
     json += "\"learningCorrectionAlpha\":" + String(config.learningCorrectionAlpha, 3) + ",";
     json += "\"powerLimitW\":" + String(config.powerLimitW, 2) + ",";
     json += "\"etaAveragingSeconds\":" + String(config.etaAveragingSeconds, 1) + ",";
     json += "\"etaIdleHoldSeconds\":" + String(config.etaIdleHoldSeconds, 1) + ",";
-    json += "\"etaMinPowerW\":" + String(config.etaMinPowerW, 2) + ",";
-    json += "\"etaMaxHours\":" + String(config.etaMaxHours, 2) + ",";
     json += "\"smallScreenTimeoutSec\":" + String(persistentData.uiConfig.smallScreenTimeoutSec) + ",";
     json += "\"mainScreenTimeoutSec\":" + String(persistentData.uiConfig.mainScreenTimeoutSec) + ",";
-    json += "\"systemIdleTimeoutSec\":" + String(systemIdleTimeoutSec);
+    json += "\"fanMinPercent\":" + String(coolingConfig.fanMinPercent, 1) + ",";
+    json += "\"fanStartPercent\":" + String(coolingConfig.fanStartPercent, 1) + ",";
+    json += "\"fanStartBoostMs\":" + String(coolingConfig.fanStartBoostMs) + ",";
+    json += "\"fanOffTemperatureC\":" + String(coolingConfig.fanOffTemperatureC, 1) + ",";
+    json += "\"fanOnTemperatureC\":" + String(coolingConfig.fanOnTemperatureC, 1) + ",";
+    json += "\"fanFullTemperatureC\":" + String(coolingConfig.fanFullTemperatureC, 1);
     json += "}";
 
     return json;
@@ -921,106 +940,201 @@ bool AppController::handleSetCommand(const String &expression, String &error) {
         return false;
     }
 
-    int intValue = static_cast<int>(floatValue);
     BatteryConfig c = batteryMeter.getConfig();
 
-    if (key == "nominalCapacityWh") {
-        c.nominalCapacityWh = clampFloat(floatValue, 1.0f, 5000.0f);
-        batteryMeter.setConfig(c);
+    auto requireRange = [&](float minValue, float maxValue) {
+        if (floatValue < minValue || floatValue > maxValue) {
+            error = "value_out_of_range";
+            return false;
+        }
         return true;
-    }
+    };
+
     if (key == "learnedCapacityWh") {
+        if (!requireRange(Config::LEARNED_CAPACITY_MIN_WH, Config::LEARNED_CAPACITY_MAX_WH)) {
+            return false;
+        }
         batteryMeter.setLearnedCapacityWh(floatValue);
         return true;
     }
     if (key == "currentStoredWh") {
+        float maxStoredWh = min(
+            batteryMeter.getState().learnedCapacityWh,
+            Config::LEARNED_CAPACITY_MAX_WH
+        );
+        if (!requireRange(0.0f, maxStoredWh)) {
+            return false;
+        }
         batteryMeter.setCurrentStoredWh(floatValue);
         return true;
     }
-    if (key == "remainingPercent") {
-        batteryMeter.setRemainingPercent(floatValue);
-        return true;
-    }
     if (key == "lowCutVoltageV") {
-        c.lowCutVoltageV = clampFloat(floatValue, 1.0f, 60.0f);
+        if (!requireRange(Config::LOW_CUT_VOLTAGE_MIN_V, Config::LOW_CUT_VOLTAGE_MAX_V)) {
+            return false;
+        }
+        c.lowCutVoltageV = floatValue;
         batteryMeter.setConfig(c);
         return true;
     }
     if (key == "fullVoltageV") {
-        c.fullVoltageV = clampFloat(floatValue, 1.0f, 60.0f);
+        if (!requireRange(Config::FULL_VOLTAGE_MIN_V, Config::FULL_VOLTAGE_MAX_V)) {
+            return false;
+        }
+        c.fullVoltageV = floatValue;
         batteryMeter.setConfig(c);
         return true;
     }
     if (key == "fullCurrentA") {
-        c.fullCurrentA = clampFloat(floatValue, 0.01f, 20.0f);
+        if (!requireRange(Config::FULL_CURRENT_MIN_A, Config::FULL_CURRENT_MAX_A)) {
+            return false;
+        }
+        c.fullCurrentA = floatValue;
         batteryMeter.setConfig(c);
         return true;
     }
     if (key == "lowSocPercent") {
-        c.lowSocPercent = clampFloat(floatValue, 0.0f, 100.0f);
-        batteryMeter.setConfig(c);
-        return true;
-    }
-    if (key == "criticalSocPercent") {
-        c.criticalSocPercent = clampFloat(floatValue, 0.0f, 100.0f);
-        batteryMeter.setConfig(c);
-        return true;
-    }
-    if (key == "learningEndVoltageV") {
-        c.learningEndVoltageV = clampFloat(floatValue, 1.0f, 60.0f);
-        batteryMeter.setConfig(c);
-        return true;
-    }
-    if (key == "learningMinDischargeWh") {
-        c.learningMinDischargeWh = clampFloat(floatValue, 1.0f, 5000.0f);
+        if (!requireRange(Config::LOW_SOC_PERCENT_MIN, Config::LOW_SOC_PERCENT_MAX)) {
+            return false;
+        }
+        c.lowSocPercent = floatValue;
         batteryMeter.setConfig(c);
         return true;
     }
     if (key == "learningCorrectionAlpha") {
-        c.learningCorrectionAlpha = clampFloat(floatValue, 0.01f, 1.0f);
+        if (!requireRange(
+            Config::LEARNING_CORRECTION_ALPHA_MIN,
+            Config::LEARNING_CORRECTION_ALPHA_MAX
+        )) {
+            return false;
+        }
+        c.learningCorrectionAlpha = floatValue;
         batteryMeter.setConfig(c);
         return true;
     }
     if (key == "powerLimitW") {
-        c.powerLimitW = clampFloat(floatValue, 5.0f, 2000.0f);
+        if (!requireRange(Config::POWER_LIMIT_MIN_W, Config::POWER_LIMIT_MAX_W)) {
+            return false;
+        }
+        c.powerLimitW = floatValue;
         batteryMeter.setConfig(c);
         return true;
     }
     if (key == "etaAveragingSeconds") {
-        c.etaAveragingSeconds = clampFloat(floatValue, 5.0f, 300.0f);
+        if (!requireRange(Config::ETA_AVERAGING_MIN_SECONDS, Config::ETA_AVERAGING_MAX_SECONDS)) {
+            return false;
+        }
+        if (!Config::isEtaAveragingAllowed(floatValue)) {
+            error = "value_not_allowed";
+            return false;
+        }
+        c.etaAveragingSeconds = floatValue;
         batteryMeter.setConfig(c);
         return true;
     }
     if (key == "etaIdleHoldSeconds") {
-        c.etaIdleHoldSeconds = clampFloat(floatValue, 0.0f, 120.0f);
-        batteryMeter.setConfig(c);
-        return true;
-    }
-    if (key == "etaMinPowerW") {
-        c.etaMinPowerW = clampFloat(floatValue, Config::POWER_DEADZONE_W, 100.0f);
-        batteryMeter.setConfig(c);
-        return true;
-    }
-    if (key == "etaMaxHours") {
-        c.etaMaxHours = clampFloat(floatValue, 1.0f, 1000.0f);
+        if (!requireRange(Config::ETA_IDLE_HOLD_MIN_SECONDS, Config::ETA_IDLE_HOLD_MAX_SECONDS)) {
+            return false;
+        }
+        c.etaIdleHoldSeconds = floatValue;
         batteryMeter.setConfig(c);
         return true;
     }
     if (key == "smallScreenTimeoutSec") {
-        persistentData.uiConfig.smallScreenTimeoutSec = static_cast<uint16_t>(constrain(intValue, 5, 3600));
+        if (!requireRange(
+            static_cast<float>(Config::SCREEN_TIMEOUT_MIN_SEC),
+            static_cast<float>(Config::SCREEN_TIMEOUT_MAX_SEC)
+        )) {
+            return false;
+        }
+        if (!isWholeNumber(floatValue)) {
+            error = "integer_required";
+            return false;
+        }
+        uint32_t timeoutSec = static_cast<uint32_t>(floatValue);
+        if (!Config::isScreenTimeoutAllowed(timeoutSec)) {
+            error = "value_not_allowed";
+            return false;
+        }
+        persistentData.uiConfig.smallScreenTimeoutSec = static_cast<uint16_t>(timeoutSec);
         return true;
     }
     if (key == "mainScreenTimeoutSec") {
-        persistentData.uiConfig.mainScreenTimeoutSec = static_cast<uint16_t>(constrain(intValue, 5, 3600));
+        if (!requireRange(
+            static_cast<float>(Config::SCREEN_TIMEOUT_MIN_SEC),
+            static_cast<float>(Config::SCREEN_TIMEOUT_MAX_SEC)
+        )) {
+            return false;
+        }
+        if (!isWholeNumber(floatValue)) {
+            error = "integer_required";
+            return false;
+        }
+        uint32_t timeoutSec = static_cast<uint32_t>(floatValue);
+        if (!Config::isScreenTimeoutAllowed(timeoutSec)) {
+            error = "value_not_allowed";
+            return false;
+        }
+        persistentData.uiConfig.mainScreenTimeoutSec = static_cast<uint16_t>(timeoutSec);
         return true;
     }
-    if (key == "systemIdleTimeoutSec") {
-        systemIdleTimeoutSec = static_cast<uint32_t>(clampFloat(
-            floatValue,
-            0.0f,
-            static_cast<float>(Config::SYSTEM_IDLE_TIMEOUT_MAX_SEC)
-        ));
-        markSystemActivity();
+
+    CoolingConfig nextCoolingConfig = coolingConfig;
+    bool coolingSetting = true;
+
+    if (key == "fanMinPercent") {
+        if (!requireRange(Config::FAN_MIN_PERCENT_MIN, Config::FAN_MIN_PERCENT_MAX)) {
+            return false;
+        }
+        nextCoolingConfig.fanMinPercent = floatValue;
+    } else if (key == "fanStartPercent") {
+        if (!requireRange(Config::FAN_START_PERCENT_MIN, Config::FAN_START_PERCENT_MAX)) {
+            return false;
+        }
+        nextCoolingConfig.fanStartPercent = floatValue;
+    } else if (key == "fanStartBoostMs") {
+        if (!requireRange(
+            static_cast<float>(Config::FAN_START_BOOST_MIN_MS),
+            static_cast<float>(Config::FAN_START_BOOST_MAX_MS)
+        )) {
+            return false;
+        }
+        if (!isWholeNumber(floatValue)) {
+            error = "integer_required";
+            return false;
+        }
+        nextCoolingConfig.fanStartBoostMs = static_cast<uint32_t>(floatValue);
+    } else if (key == "fanOffTemperatureC") {
+        if (!requireRange(Config::FAN_TEMPERATURE_MIN_C, Config::FAN_TEMPERATURE_MAX_C)) {
+            return false;
+        }
+        nextCoolingConfig.fanOffTemperatureC = floatValue;
+    } else if (key == "fanOnTemperatureC") {
+        if (!requireRange(Config::FAN_TEMPERATURE_MIN_C, Config::FAN_TEMPERATURE_MAX_C)) {
+            return false;
+        }
+        nextCoolingConfig.fanOnTemperatureC = floatValue;
+    } else if (key == "fanFullTemperatureC") {
+        if (!requireRange(Config::FAN_TEMPERATURE_MIN_C, Config::FAN_TEMPERATURE_MAX_C)) {
+            return false;
+        }
+        nextCoolingConfig.fanFullTemperatureC = floatValue;
+    } else {
+        coolingSetting = false;
+    }
+
+    if (coolingSetting) {
+        if (
+            nextCoolingConfig.fanStartPercent < nextCoolingConfig.fanMinPercent
+            || nextCoolingConfig.fanOffTemperatureC >= nextCoolingConfig.fanOnTemperatureC
+            || nextCoolingConfig.fanOnTemperatureC >= nextCoolingConfig.fanFullTemperatureC
+        ) {
+            error = "invalid_setting_relation";
+            return false;
+        }
+
+        coolingConfig = nextCoolingConfig;
+        cooling.setConfig(coolingConfig);
+        coolingConfig = cooling.getConfig();
         return true;
     }
 

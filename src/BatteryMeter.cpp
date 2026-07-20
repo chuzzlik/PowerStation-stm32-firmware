@@ -5,11 +5,7 @@
 
 void BatteryMeter::begin(const BatteryConfig &config, float initialStoredWh) {
     this->config = config;
-    this->config.chargeEfficiency = clampFloat(
-        this->config.chargeEfficiency,
-        Config::CHARGE_EFFICIENCY_MIN,
-        Config::CHARGE_EFFICIENCY_MAX
-    );
+    sanitizeConfig();
 
     state.learnedCapacityWh = this->config.learnedCapacityWh;
     state.currentStoredWh = clampFloat(initialStoredWh, 0.0f, state.learnedCapacityWh);
@@ -77,21 +73,73 @@ BatteryServiceInfo BatteryMeter::getServiceInfo() const {
 
 void BatteryMeter::setConfig(const BatteryConfig &config) {
     this->config = config;
-    this->config.chargeEfficiency = clampFloat(
-        this->config.chargeEfficiency,
-        Config::CHARGE_EFFICIENCY_MIN,
-        Config::CHARGE_EFFICIENCY_MAX
-    );
-    this->config.learningCorrectionAlpha = clampFloat(this->config.learningCorrectionAlpha, 0.01f, 1.0f);
-    this->config.etaAveragingSeconds = clampFloat(this->config.etaAveragingSeconds, 5.0f, 300.0f);
-    this->config.etaIdleHoldSeconds = clampFloat(this->config.etaIdleHoldSeconds, 0.0f, 120.0f);
-    this->config.etaMinPowerW = clampFloat(this->config.etaMinPowerW, Config::POWER_DEADZONE_W, 100.0f);
-    this->config.etaMaxHours = clampFloat(this->config.etaMaxHours, 1.0f, 1000.0f);
+    sanitizeConfig();
+
     state.learnedCapacityWh = this->config.learnedCapacityWh;
     state.currentStoredWh = clampFloat(state.currentStoredWh, 0.0f, state.learnedCapacityWh);
 
     updateSoc();
     updateEstimatedTime(millis());
+}
+
+void BatteryMeter::sanitizeConfig() {
+    this->config.minAllowedCapacityWh = Config::LEARNED_CAPACITY_MIN_WH;
+    this->config.maxAllowedCapacityWh = Config::LEARNED_CAPACITY_MAX_WH;
+    this->config.learnedCapacityWh = clampFloat(
+        this->config.learnedCapacityWh,
+        this->config.minAllowedCapacityWh,
+        this->config.maxAllowedCapacityWh
+    );
+    this->config.chargeEfficiency = clampFloat(
+        this->config.chargeEfficiency,
+        Config::CHARGE_EFFICIENCY_MIN,
+        Config::CHARGE_EFFICIENCY_MAX
+    );
+    this->config.lowCutVoltageV = clampFloat(
+        this->config.lowCutVoltageV,
+        Config::LOW_CUT_VOLTAGE_MIN_V,
+        Config::LOW_CUT_VOLTAGE_MAX_V
+    );
+    this->config.fullVoltageV = clampFloat(
+        this->config.fullVoltageV,
+        Config::FULL_VOLTAGE_MIN_V,
+        Config::FULL_VOLTAGE_MAX_V
+    );
+    this->config.fullCurrentA = clampFloat(
+        this->config.fullCurrentA,
+        Config::FULL_CURRENT_MIN_A,
+        Config::FULL_CURRENT_MAX_A
+    );
+    this->config.lowSocPercent = clampFloat(
+        this->config.lowSocPercent,
+        Config::LOW_SOC_PERCENT_MIN,
+        Config::LOW_SOC_PERCENT_MAX
+    );
+    this->config.learningCorrectionAlpha = clampFloat(
+        this->config.learningCorrectionAlpha,
+        Config::LEARNING_CORRECTION_ALPHA_MIN,
+        Config::LEARNING_CORRECTION_ALPHA_MAX
+    );
+    this->config.etaAveragingSeconds = clampFloat(
+        this->config.etaAveragingSeconds,
+        Config::ETA_AVERAGING_MIN_SECONDS,
+        Config::ETA_AVERAGING_MAX_SECONDS
+    );
+    if (!Config::isEtaAveragingAllowed(this->config.etaAveragingSeconds)) {
+        this->config.etaAveragingSeconds = BatteryConfig().etaAveragingSeconds;
+    }
+    this->config.etaIdleHoldSeconds = clampFloat(
+        this->config.etaIdleHoldSeconds,
+        Config::ETA_IDLE_HOLD_MIN_SECONDS,
+        Config::ETA_IDLE_HOLD_MAX_SECONDS
+    );
+    this->config.powerLimitW = clampFloat(
+        this->config.powerLimitW,
+        Config::POWER_LIMIT_MIN_W,
+        Config::POWER_LIMIT_MAX_W
+    );
+    this->config.etaMinPowerW = clampFloat(this->config.etaMinPowerW, Config::POWER_DEADZONE_W, 100.0f);
+    this->config.etaMaxHours = clampFloat(this->config.etaMaxHours, 1.0f, 1000.0f);
 }
 
 void BatteryMeter::setServiceInfo(const BatteryServiceInfo &service) {

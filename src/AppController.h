@@ -41,6 +41,7 @@ private:
     CoolingController cooling;
 
     PersistentData persistentData;
+    CoolingConfig coolingConfig;
     SaveConfig saveConfig;
 
     SystemState systemState = SystemState::Off;

@@ -3,7 +3,8 @@
 #include <Arduino.h>
 
 namespace Config {
-    constexpr const char *FIRMWARE_VERSION = "2.6.3";
+    constexpr const char *FIRMWARE_VERSION = "2.7.0";
+    constexpr uint8_t API_VERSION = 7;
 
     constexpr uint8_t PIN_NONE = 255;
 
@@ -90,15 +91,55 @@ namespace Config {
 
     // Вентилятор 12 В через IRL3705.
     constexpr uint8_t FAN_PWM_CHANNEL = 7;
-    constexpr uint32_t FAN_PWM_FREQUENCY_HZ = 250;
+    constexpr uint32_t FAN_PWM_FREQUENCY_HZ = 20000;
     constexpr uint8_t FAN_PWM_RESOLUTION_BITS = 8;
-    constexpr float FAN_MIN_PERCENT = 50.0f;
-    constexpr float FAN_START_PERCENT = 100.0f;
-    constexpr uint32_t FAN_START_BOOST_MS = 1000;
-    constexpr float FAN_OFF_TEMPERATURE_C = 38.0f;
-    constexpr float FAN_ON_TEMPERATURE_C = 42.0f;
-    constexpr float FAN_FULL_TEMPERATURE_C = 60.0f;
     constexpr float FAN_RAMP_PERCENT_PER_SECOND = 25.0f;
+
+    constexpr float FAN_MIN_PERCENT_MIN = 20.0f;
+    constexpr float FAN_MIN_PERCENT_MAX = 100.0f;
+    constexpr float FAN_START_PERCENT_MIN = 40.0f;
+    constexpr float FAN_START_PERCENT_MAX = 100.0f;
+    constexpr uint32_t FAN_START_BOOST_MIN_MS = 100;
+    constexpr uint32_t FAN_START_BOOST_MAX_MS = 5000;
+    constexpr float FAN_TEMPERATURE_MIN_C = 0.0f;
+    constexpr float FAN_TEMPERATURE_MAX_C = 100.0f;
+
+    constexpr uint16_t SCREEN_TIMEOUT_MIN_SEC = 10;
+    constexpr uint16_t SCREEN_TIMEOUT_MAX_SEC = 900;
+    constexpr float LOW_SOC_PERCENT_MIN = 5.0f;
+    constexpr float LOW_SOC_PERCENT_MAX = 50.0f;
+    constexpr float POWER_LIMIT_MIN_W = 20.0f;
+    constexpr float POWER_LIMIT_MAX_W = 300.0f;
+    constexpr float LOW_CUT_VOLTAGE_MIN_V = 8.0f;
+    constexpr float LOW_CUT_VOLTAGE_MAX_V = 12.0f;
+    constexpr float FULL_VOLTAGE_MIN_V = 13.6f;
+    constexpr float FULL_VOLTAGE_MAX_V = 14.8f;
+    constexpr float FULL_CURRENT_MIN_A = 0.05f;
+    constexpr float FULL_CURRENT_MAX_A = 2.0f;
+    constexpr float LEARNED_CAPACITY_MIN_WH = 150.0f;
+    constexpr float LEARNED_CAPACITY_MAX_WH = 500.0f;
+    constexpr float LEARNING_CORRECTION_ALPHA_MIN = 0.05f;
+    constexpr float LEARNING_CORRECTION_ALPHA_MAX = 0.50f;
+    constexpr float ETA_AVERAGING_MIN_SECONDS = 15.0f;
+    constexpr float ETA_AVERAGING_MAX_SECONDS = 120.0f;
+    constexpr float ETA_IDLE_HOLD_MIN_SECONDS = 0.0f;
+    constexpr float ETA_IDLE_HOLD_MAX_SECONDS = 120.0f;
+
+    inline bool isScreenTimeoutAllowed(uint32_t value) {
+        return value == 10
+            || value == 30
+            || value == 60
+            || value == 300
+            || value == 900;
+    }
+
+    inline bool isEtaAveragingAllowed(float value) {
+        return value == 15.0f
+            || value == 30.0f
+            || value == 45.0f
+            || value == 60.0f
+            || value == 120.0f;
+    }
 
     // NTC B3950. Делитель: постоянный резистор 10 кОм к 3.3 В, NTC к GND.
     constexpr float NTC_FIXED_RESISTANCE_OHM = 10000.0f;

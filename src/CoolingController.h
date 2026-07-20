@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include "Types.h"
 
 struct CoolingState {
     float powerTemperatureC = NAN;
@@ -14,12 +15,15 @@ struct CoolingState {
 
 class CoolingController {
 public:
-    void begin();
+    void begin(const CoolingConfig &config);
     void update();
     CoolingState getState() const;
+    CoolingConfig getConfig() const;
+    void setConfig(const CoolingConfig &config);
 
 private:
     CoolingState state;
+    CoolingConfig config;
 
     bool powerTemperatureReady = false;
     bool airTemperatureReady = false;

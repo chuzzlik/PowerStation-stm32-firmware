@@ -10,6 +10,9 @@ public:
     PersistentData load();
     void save(const PersistentData &data);
 
+    CoolingConfig loadCoolingConfig();
+    void saveCoolingConfig(const CoolingConfig &config);
+
     uint32_t loadSystemIdleTimeoutSec(uint32_t defaultValue);
     void saveSystemIdleTimeoutSec(uint32_t value);
 

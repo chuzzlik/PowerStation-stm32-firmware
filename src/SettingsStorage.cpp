@@ -26,6 +26,21 @@ void SettingsStorage::save(const PersistentData &data) {
     prefs.putBytes("data", &data, sizeof(PersistentData));
 }
 
+CoolingConfig SettingsStorage::loadCoolingConfig() {
+    CoolingConfig config;
+
+    if (prefs.getBytesLength("cooling") != sizeof(CoolingConfig)) {
+        return config;
+    }
+
+    prefs.getBytes("cooling", &config, sizeof(CoolingConfig));
+    return config;
+}
+
+void SettingsStorage::saveCoolingConfig(const CoolingConfig &config) {
+    prefs.putBytes("cooling", &config, sizeof(CoolingConfig));
+}
+
 uint32_t SettingsStorage::loadSystemIdleTimeoutSec(uint32_t defaultValue) {
     return prefs.getUInt("sysIdleSec", defaultValue);
 }

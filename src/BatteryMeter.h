@@ -56,6 +56,8 @@ private:
 
     bool configChanged = false;
 
+    void sanitizeConfig();
+
     void integrateEnergy(const PowerSample &sample, float dtHours);
     void updatePowerState();
     void updateSoc();
