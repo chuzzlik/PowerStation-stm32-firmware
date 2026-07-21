@@ -33,7 +33,15 @@ void StatusLed::begin(uint8_t pin) {
     }
 
     pinMode(pin, OUTPUT);
-    analogWrite(pin, 0);
+    digitalWrite(pin, LOW);
+
+    ledcSetup(
+        Config::LED_PWM_CHANNEL,
+        Config::LED_PWM_FREQUENCY_HZ,
+        Config::LED_PWM_RESOLUTION_BITS
+    );
+    ledcAttachPin(pin, Config::LED_PWM_CHANNEL);
+    ledcWrite(Config::LED_PWM_CHANNEL, 0);
 }
 
 void StatusLed::setMode(StatusLedMode mode) {
@@ -68,7 +76,6 @@ void StatusLed::update() {
             break;
 
         case StatusLedMode::ChargeBlink:
-            // Равномерное мигание с коротким, почти незаметным сглаживанием фронтов.
             value = calculateSoftBlink(elapsed, 1000);
             allowFullOff = true;
             break;
@@ -86,7 +93,7 @@ void StatusLed::update() {
         value = scaleActiveBrightness(value, allowFullOff);
     }
 
-    analogWrite(pin, value);
+    ledcWrite(Config::LED_PWM_CHANNEL, value);
 }
 
 uint8_t StatusLed::calculateBreathing(uint32_t elapsedMs, uint32_t periodMs) const {
@@ -100,8 +107,6 @@ uint8_t StatusLed::calculateBreathing(uint32_t elapsedMs, uint32_t periodMs) con
 uint8_t StatusLed::calculateSoftBlink(uint32_t elapsedMs, uint32_t periodMs) const {
     uint32_t pos = elapsedMs % periodMs;
 
-    // 420 мс ярко, 80 мс плавное гашение,
-    // 420 мс выключено, 80 мс плавное включение.
     constexpr uint32_t HOLD_MS = 420;
     constexpr uint32_t FADE_MS = 80;
 
@@ -125,7 +130,6 @@ uint8_t StatusLed::calculateSoftBlink(uint32_t elapsedMs, uint32_t periodMs) con
 uint8_t StatusLed::calculateBlink(uint32_t elapsedMs, uint32_t periodMs) const {
     uint32_t pos = elapsedMs % periodMs;
 
-    // Низкий заряд: две короткие вспышки, затем пауза.
     if (pos < 80) {
         return 255;
     }

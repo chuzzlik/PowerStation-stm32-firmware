@@ -58,11 +58,11 @@ struct PowerSample {
 
 struct BatteryConfig {
     float nominalCapacityWh = 450.0f;
-    float learnedCapacityWh = 450.0f;
+    float learnedCapacityWh = 500.0f;
 
-    float lowCutVoltageV = 9.8f;
-    float fullVoltageV = 14.2f;
-    float fullCurrentA = 0.15f;
+    float lowCutVoltageV = 11.0f;
+    float fullVoltageV = 14.8f;
+    float fullCurrentA = 0.2f;
 
     float chargeEfficiency = 0.95f;
     float lowSocPercent = 15.0f;
@@ -72,14 +72,14 @@ struct BatteryConfig {
     float learningMinDischargeWh = 50.0f;
     float learningCorrectionAlpha = 0.25f;
 
-    float minAllowedCapacityWh = 50.0f;
-    float maxAllowedCapacityWh = 1000.0f;
+    float minAllowedCapacityWh = 150.0f;
+    float maxAllowedCapacityWh = 500.0f;
 
-    float powerLimitW = 120.0f;
+    float powerLimitW = 100.0f;
 
     // Параметры устойчивого расчёта ETA.
-    float etaAveragingSeconds = 45.0f;
-    float etaIdleHoldSeconds = 15.0f;
+    float etaAveragingSeconds = 30.0f;
+    float etaIdleHoldSeconds = 10.0f;
     float etaMinPowerW = 3.0f;
     float etaMaxHours = 168.0f;
 };
@@ -89,6 +89,15 @@ struct UiConfig {
     uint16_t mainScreenTimeoutSec = 30;
 };
 
+struct CoolingConfig {
+    float fanMinPercent = 40.0f;
+    float fanStartPercent = 80.0f;
+    uint32_t fanStartBoostMs = 1000;
+    float fanOffTemperatureC = 38.0f;
+    float fanOnTemperatureC = 42.0f;
+    float fanFullTemperatureC = 60.0f;
+};
+
 struct BatteryState {
     PowerState powerState = PowerState::Idle;
 
@@ -96,8 +105,8 @@ struct BatteryState {
     float currentA = 0.0f;
     float powerW = 0.0f;
 
-    float currentStoredWh = 450.0f;
-    float learnedCapacityWh = 450.0f;
+    float currentStoredWh = 500.0f;
+    float learnedCapacityWh = 500.0f;
     float socPercent = 100.0f;
     float estimatedTimeHours = -1.0f;
     float averagedPowerW = 0.0f;
@@ -132,7 +141,7 @@ struct PersistentData {
     BatteryConfig batteryConfig;
     UiConfig uiConfig;
 
-    float currentStoredWh = 450.0f;
+    float currentStoredWh = 500.0f;
 
     uint32_t learnedCycles = 0;
     float lastMeasuredCapacityWh = 0.0f;

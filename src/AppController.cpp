@@ -3,9 +3,19 @@
 #include "Utils.h"
 #include <math.h>
 #include <esp_system.h>
+#include <stdlib.h>
+
+namespace {
+    bool isWholeNumber(float value) {
+        return floorf(value) == value;
+    }
+}
 
 void AppController::begin() {
-    // Максимально рано держим MOSFET выключенным после железного включателя.
+    // Максимально рано оставляем выключенными силовой выход и вентилятор.
+    pinMode(Config::PIN_FAN_PWM, OUTPUT);
+    digitalWrite(Config::PIN_FAN_PWM, LOW);
+
     pinMode(Config::PIN_MOSFET_OUTPUT, OUTPUT);
     digitalWrite(
         Config::PIN_MOSFET_OUTPUT,
@@ -29,12 +39,23 @@ void AppController::begin() {
 
     storage.begin();
     persistentData = storage.load();
+    coolingConfig = storage.loadCoolingConfig();
+    if (!Config::isScreenTimeoutAllowed(persistentData.uiConfig.smallScreenTimeoutSec)) {
+        persistentData.uiConfig.smallScreenTimeoutSec = UiConfig().smallScreenTimeoutSec;
+    }
+    if (!Config::isScreenTimeoutAllowed(persistentData.uiConfig.mainScreenTimeoutSec)) {
+        persistentData.uiConfig.mainScreenTimeoutSec = UiConfig().mainScreenTimeoutSec;
+    }
+    systemIdleTimeoutSec = min(
+        storage.loadSystemIdleTimeoutSec(Config::SYSTEM_IDLE_TIMEOUT_DEFAULT_SEC),
+        Config::SYSTEM_IDLE_TIMEOUT_MAX_SEC
+    );
 
     const esp_reset_reason_t resetReason = esp_reset_reason();
     const bool restoreAfterUnexpectedReset =
-            persistentData.systemWasOn
-            && resetReason != ESP_RST_POWERON
-            && resetReason != ESP_RST_EXT;
+        persistentData.systemWasOn
+        && resetReason != ESP_RST_POWERON
+        && resetReason != ESP_RST_EXT;
 
     Serial.print("Reset reason: ");
     Serial.println(static_cast<int>(resetReason));
@@ -71,6 +92,8 @@ void AppController::begin() {
     mosfetOutput.begin(Config::PIN_MOSFET_OUTPUT);
     buttons.begin();
     statusLed.begin(Config::PIN_POWER_LED);
+    cooling.begin(coolingConfig);
+    coolingConfig = cooling.getConfig();
 
     xTaskCreatePinnedToCore(
         AppController::ledTask,
@@ -100,14 +123,14 @@ void AppController::begin() {
         mosfetOutput.disable();
     }
 
+    systemIdleStartedMs = systemState == SystemState::On ? now : 0;
+
     smallDisplayOn = true;
     mainDisplayOn = false;
 
-    // После обычного включения питания показываем OFF 2 секунды.
-    // После аварийного рестарта сразу возвращаем рабочую индикацию.
     smallDisplayPreviewUntilMs = restoreAfterUnexpectedReset
-                                     ? 0
-                                     : now + Config::SMALL_SCREEN_OFF_PREVIEW_MS;
+        ? 0
+        : now + Config::SMALL_SCREEN_OFF_PREVIEW_MS;
 
     lastSmallDisplayActivityMs = now;
     lastMainDisplayActivityMs = now;
@@ -139,19 +162,20 @@ void AppController::ledTask(void *param) {
 }
 
 void AppController::update() {
+    cooling.update();
     readButtons();
     readPowerData();
 
     updatePowerState();
     updateSystemProtection();
-
+    updateSystemIdleTimeout();
     updateBluetooth();
 
     updateSmallDisplayState();
     updateMainDisplayState();
 
-    updateLed(); // <-- поднять выше
-    renderDisplaysIfNeeded(); // <-- ниже
+    updateLed();
+    renderDisplaysIfNeeded();
     updateSaving();
 }
 
@@ -186,11 +210,10 @@ void AppController::scanI2C(TwoWire &wire, const char *name) {
 void AppController::readButtons() {
     ButtonEvent event = buttons.update();
 
-    if (event == ButtonEvent::None) {
-        return;
+    if (event != ButtonEvent::None) {
+        markSystemActivity();
+        handleButtonEvent(event);
     }
-
-    handleButtonEvent(event);
 }
 
 void AppController::readPowerData() {
@@ -221,6 +244,15 @@ void AppController::readPowerData() {
 
     PowerSample sample = powerSensor.read();
     batteryMeter.update(sample);
+
+    if (batteryMeter.consumeConfigChanged()) {
+        requestForceSave();
+        setLastEvent("CHARGE EFF AUTO");
+
+        if (ble.isEnabled()) {
+            ble.notifySettings(makeSettingsJson());
+        }
+    }
 }
 
 void AppController::updatePowerState() {
@@ -228,15 +260,13 @@ void AppController::updatePowerState() {
     previousPowerState = powerState;
     powerState = batteryMeter.getState().powerState;
 
-    if (powerState != previousPowerState) {
-        if (
-            systemState == SystemState::On &&
-            previousPowerState == PowerState::Idle &&
-            (powerState == PowerState::Charge || powerState == PowerState::Discharge)
-        ) {
-            wakeSmallDisplay();
-        }
-
+    if (
+        powerState != previousPowerState
+        && systemState == SystemState::On
+        && previousPowerState == PowerState::Idle
+        && (powerState == PowerState::Charge || powerState == PowerState::Discharge)
+    ) {
+        wakeSmallDisplay();
     }
 
     const bool chargeInputDetectedNow =
@@ -254,10 +284,10 @@ void AppController::updatePowerState() {
     }
 
     if (
-        systemState == SystemState::Off &&
-        autoPowerOnPending &&
-        chargeInputDetected &&
-        now - autoPowerOnStartedMs >= Config::AUTO_POWER_ON_CHARGE_DELAY_MS
+        systemState == SystemState::Off
+        && autoPowerOnPending
+        && chargeInputDetected
+        && now - autoPowerOnStartedMs >= Config::AUTO_POWER_ON_CHARGE_DELAY_MS
     ) {
         autoPowerOnPending = false;
         powerSystemOn("AUTO CHARGE");
@@ -290,6 +320,37 @@ void AppController::updateSystemProtection() {
     }
 }
 
+void AppController::updateSystemIdleTimeout() {
+    if (systemState != SystemState::On || systemIdleTimeoutSec == 0) {
+        systemIdleStartedMs = 0;
+        return;
+    }
+
+    if (powerState != PowerState::Idle) {
+        systemIdleStartedMs = 0;
+        return;
+    }
+
+    uint32_t now = millis();
+
+    if (systemIdleStartedMs == 0) {
+        systemIdleStartedMs = now;
+        return;
+    }
+
+    uint32_t timeoutMs = systemIdleTimeoutSec * 1000UL;
+
+    if (now - systemIdleStartedMs >= timeoutMs) {
+        powerSystemOff("AUTO IDLE");
+    }
+}
+
+void AppController::markSystemActivity() {
+    if (systemState == SystemState::On) {
+        systemIdleStartedMs = millis();
+    }
+}
+
 void AppController::updateSmallDisplayState() {
     uint32_t now = millis();
     uint32_t timeoutMs = persistentData.uiConfig.smallScreenTimeoutSec * 1000UL;
@@ -316,11 +377,7 @@ void AppController::updateSmallDisplayState() {
         return;
     }
 
-    if (powerState != PowerState::Idle) {
-        return;
-    }
-
-    if (smallDisplayOn && now - lastSmallDisplayActivityMs > timeoutMs) {
+    if (powerState == PowerState::Idle && smallDisplayOn && now - lastSmallDisplayActivityMs > timeoutMs) {
         sleepSmallDisplay();
     }
 }
@@ -367,6 +424,7 @@ void AppController::renderDisplaysIfNeeded() {
         battery,
         config,
         persistentData.uiConfig,
+        cooling.getState(),
         ble.isEnabled(),
         ble.isConnected()
     );
@@ -374,6 +432,8 @@ void AppController::renderDisplaysIfNeeded() {
 
 void AppController::updateBluetooth() {
     ble.update();
+
+    uint32_t now = millis();
     bluetoothConnected = ble.isConnected();
 
     if (bluetoothConnected != previousBluetoothConnected) {
@@ -383,6 +443,39 @@ void AppController::updateBluetooth() {
             setLastEvent(bluetoothConnected ? "BLE CONN" : "BLE DISC");
             wakeMainDisplay(MainPage::Bluetooth, true);
         }
+
+        bleWaitingStartedMs = bluetoothConnected ? 0 : now;
+    }
+
+    if (!ble.isEnabled()) {
+        bleWaitingStartedMs = 0;
+        return;
+    }
+
+    if (bluetoothConnected) {
+        bleWaitingStartedMs = 0;
+        return;
+    }
+
+    if (bleWaitingStartedMs == 0) {
+        bleWaitingStartedMs = now;
+    }
+
+    if (now - bleWaitingStartedMs < Config::BLE_WAITING_TIMEOUT_MS) {
+        return;
+    }
+
+    ble.disable();
+    previousBluetoothConnected = false;
+    bleWaitingStartedMs = 0;
+    setLastEvent("BLE TIMEOUT");
+
+    if (mainPage == MainPage::Bluetooth) {
+        mainPage = MainPage::BatPower;
+    }
+
+    if (mainDisplayOn) {
+        wakeMainDisplay(mainPage, true);
     }
 }
 
@@ -433,7 +526,6 @@ void AppController::handlePowerShort() {
         return;
     }
 
-    // SYSTEM_OFF: только краткий просмотр батареи, MOSFET не трогать.
     wakeSmallDisplay();
     smallDisplayPreviewUntilMs = millis() + Config::SMALL_SCREEN_OFF_PREVIEW_MS;
 }
@@ -460,28 +552,6 @@ void AppController::handleScreenShort() {
     wakeMainDisplayCurrentPage();
 }
 
-// void AppController::handleScreenShort() {
-//     if (mosfetOutput.isEnabled()) {
-//         mosfetOutput.disable();
-//     } else {
-//         mosfetOutput.enable();
-//     }
-//
-//     bool mosfetOn = mosfetOutput.isEnabled();
-//     int gpioLevel = digitalRead(Config::PIN_MOSFET_OUTPUT);
-//
-//     Serial.print("MOSFET TEST: ");
-//     Serial.print(mosfetOn ? "ON" : "OFF");
-//
-//     Serial.print(" | GPIO");
-//     Serial.print(Config::PIN_MOSFET_OUTPUT);
-//     Serial.print("=");
-//     Serial.print(gpioLevel == HIGH ? "HIGH" : "LOW");
-//
-//     Serial.print(" | activeHigh=");
-//     Serial.println(Config::MOSFET_ACTIVE_HIGH ? "true" : "false");
-// }
-
 void AppController::handleScreenLong() {
     if (systemState == SystemState::Off) {
         return;
@@ -490,6 +560,7 @@ void AppController::handleScreenLong() {
     if (!ble.isEnabled()) {
         ble.enable();
         previousBluetoothConnected = false;
+        bleWaitingStartedMs = millis();
 
         setLastEvent("BLE ON");
         wakeSmallDisplay();
@@ -499,6 +570,7 @@ void AppController::handleScreenLong() {
 
     ble.disable();
     previousBluetoothConnected = false;
+    bleWaitingStartedMs = 0;
     setLastEvent("BLE OFF");
 
     if (mainPage == MainPage::Bluetooth) {
@@ -521,6 +593,8 @@ void AppController::powerSystemOn(const char *eventName) {
     batteryMeter.clearOutputDisabledByProtection();
     systemState = SystemState::On;
     persistentData.systemWasOn = true;
+    systemIdleStartedMs = millis();
+
     requestForceSave();
     updateSaving();
 
@@ -528,9 +602,10 @@ void AppController::powerSystemOn(const char *eventName) {
     wakeMainDisplay(MainPage::BatPower, true);
 }
 
-void AppController::powerSystemOff() {
+void AppController::powerSystemOff(const char *eventName) {
     smallDisplayPreviewUntilMs = 0;
     autoPowerOnPending = false;
+    systemIdleStartedMs = 0;
 
     displays.playPowerOffAnimation();
 
@@ -538,7 +613,7 @@ void AppController::powerSystemOff() {
     systemState = SystemState::Off;
     persistentData.systemWasOn = false;
 
-    setLastEvent("POWER OFF");
+    setLastEvent(eventName);
 
     requestForceSave();
     updateSaving();
@@ -550,19 +625,19 @@ void AppController::powerSystemOff() {
 
     ble.disable();
     previousBluetoothConnected = false;
+    bleWaitingStartedMs = 0;
 }
 
 void AppController::shutdownByProtection(const String &eventName) {
     smallDisplayPreviewUntilMs = 0;
     autoPowerOnPending = false;
+    systemIdleStartedMs = 0;
     batteryMeter.markOutputDisabledByProtection();
-
-    requestForceSave();
-    updateSaving();
 
     mosfetOutput.disable();
     systemState = SystemState::Off;
     persistentData.systemWasOn = false;
+
     requestForceSave();
     updateSaving();
 
@@ -647,6 +722,8 @@ void AppController::savePersistentData() {
     persistentData.totalChargeWh = service.totalChargeWh;
 
     storage.save(persistentData);
+    storage.saveCoolingConfig(coolingConfig);
+    storage.saveSystemIdleTimeoutSec(systemIdleTimeoutSec);
 
     Serial.println("Saved");
 }
@@ -705,6 +782,8 @@ void AppController::handleBleCommand(const String &command) {
         sendBleResult("", false, "empty_command");
         return;
     }
+
+    markSystemActivity();
 
     Serial.print("BLE CMD: ");
     Serial.println(cmd);
@@ -771,11 +850,12 @@ void AppController::handleBleCommand(const String &command) {
 String AppController::makeStatusJson() {
     BatteryState battery = batteryMeter.getState();
     BatteryServiceInfo service = batteryMeter.getServiceInfo();
+    CoolingState thermal = cooling.getState();
 
     String json;
-    json.reserve(480);
+    json.reserve(500);
     json = "{\"type\":\"status\",";
-    json += "\"apiVersion\":5,";
+    json += "\"apiVersion\":" + String(Config::API_VERSION) + ",";
     json += "\"firmwareVersion\":\"" + String(Config::FIRMWARE_VERSION) + "\",";
     json += "\"systemState\":\"";
     json += systemState == SystemState::On ? "ON" : "OFF";
@@ -792,6 +872,12 @@ String AppController::makeStatusJson() {
     json += "\"learningActive\":" + String(battery.learningActive ? "true" : "false") + ",";
     json += "\"learningDischargeWh\":" + String(battery.learningDischargeWh, 3) + ",";
     json += "\"learnedCycles\":" + String(service.learnedCycles) + ",";
+    json += "\"tempPowerC\":";
+    json += thermal.powerSensorValid ? String(thermal.powerTemperatureC, 2) : "null";
+    json += ",\"tempAirC\":";
+    json += thermal.airSensorValid ? String(thermal.airTemperatureC, 2) : "null";
+    json += ",\"fanPercent\":" + String(thermal.fanPercent) + ",";
+    json += "\"thermalFault\":" + String(thermal.fault ? "true" : "false") + ",";
     json += "\"mosfetEnabled\":" + String(mosfetOutput.isEnabled() ? "true" : "false") + ",";
     json += "\"bluetoothEnabled\":" + String(ble.isEnabled() ? "true" : "false") + ",";
     json += "\"bluetoothConnected\":" + String(ble.isConnected() ? "true" : "false");
@@ -804,26 +890,26 @@ String AppController::makeSettingsJson() {
     BatteryConfig config = batteryMeter.getConfig();
 
     String json;
-    json.reserve(560);
+    json.reserve(512);
     json = "{\"type\":\"settings\",";
-    json += "\"apiVersion\":5,";
-    json += "\"nominalCapacityWh\":" + String(config.nominalCapacityWh, 3) + ",";
+    json += "\"apiVersion\":" + String(Config::API_VERSION) + ",";
     json += "\"lowCutVoltageV\":" + String(config.lowCutVoltageV, 3) + ",";
     json += "\"fullVoltageV\":" + String(config.fullVoltageV, 3) + ",";
     json += "\"fullCurrentA\":" + String(config.fullCurrentA, 3) + ",";
     json += "\"chargeEfficiency\":" + String(config.chargeEfficiency, 3) + ",";
     json += "\"lowSocPercent\":" + String(config.lowSocPercent, 2) + ",";
-    json += "\"criticalSocPercent\":" + String(config.criticalSocPercent, 2) + ",";
-    json += "\"learningEndVoltageV\":" + String(config.learningEndVoltageV, 3) + ",";
-    json += "\"learningMinDischargeWh\":" + String(config.learningMinDischargeWh, 2) + ",";
     json += "\"learningCorrectionAlpha\":" + String(config.learningCorrectionAlpha, 3) + ",";
     json += "\"powerLimitW\":" + String(config.powerLimitW, 2) + ",";
     json += "\"etaAveragingSeconds\":" + String(config.etaAveragingSeconds, 1) + ",";
     json += "\"etaIdleHoldSeconds\":" + String(config.etaIdleHoldSeconds, 1) + ",";
-    json += "\"etaMinPowerW\":" + String(config.etaMinPowerW, 2) + ",";
-    json += "\"etaMaxHours\":" + String(config.etaMaxHours, 2) + ",";
     json += "\"smallScreenTimeoutSec\":" + String(persistentData.uiConfig.smallScreenTimeoutSec) + ",";
-    json += "\"mainScreenTimeoutSec\":" + String(persistentData.uiConfig.mainScreenTimeoutSec);
+    json += "\"mainScreenTimeoutSec\":" + String(persistentData.uiConfig.mainScreenTimeoutSec) + ",";
+    json += "\"fanMinPercent\":" + String(coolingConfig.fanMinPercent, 1) + ",";
+    json += "\"fanStartPercent\":" + String(coolingConfig.fanStartPercent, 1) + ",";
+    json += "\"fanStartBoostMs\":" + String(coolingConfig.fanStartBoostMs) + ",";
+    json += "\"fanOffTemperatureC\":" + String(coolingConfig.fanOffTemperatureC, 1) + ",";
+    json += "\"fanOnTemperatureC\":" + String(coolingConfig.fanOnTemperatureC, 1) + ",";
+    json += "\"fanFullTemperatureC\":" + String(coolingConfig.fanFullTemperatureC, 1);
     json += "}";
 
     return json;
@@ -854,105 +940,206 @@ bool AppController::handleSetCommand(const String &expression, String &error) {
         return false;
     }
 
-    int intValue = static_cast<int>(floatValue);
     BatteryConfig c = batteryMeter.getConfig();
 
-    if (key == "nominalCapacityWh") {
-        c.nominalCapacityWh = clampFloat(floatValue, 1.0f, 5000.0f);
-        batteryMeter.setConfig(c);
+    auto requireRange = [&](float minValue, float maxValue) {
+        if (floatValue < minValue || floatValue > maxValue) {
+            error = "value_out_of_range";
+            return false;
+        }
         return true;
-    }
+    };
+
     if (key == "learnedCapacityWh") {
+        if (!requireRange(Config::LEARNED_CAPACITY_MIN_WH, Config::LEARNED_CAPACITY_MAX_WH)) {
+            return false;
+        }
         batteryMeter.setLearnedCapacityWh(floatValue);
         return true;
     }
     if (key == "currentStoredWh") {
+        float maxStoredWh = min(
+            batteryMeter.getState().learnedCapacityWh,
+            Config::LEARNED_CAPACITY_MAX_WH
+        );
+        if (!requireRange(0.0f, maxStoredWh)) {
+            return false;
+        }
         batteryMeter.setCurrentStoredWh(floatValue);
         return true;
     }
-    if (key == "remainingPercent") {
-        batteryMeter.setRemainingPercent(floatValue);
-        return true;
-    }
     if (key == "lowCutVoltageV") {
-        c.lowCutVoltageV = clampFloat(floatValue, 1.0f, 60.0f);
+        if (!requireRange(Config::LOW_CUT_VOLTAGE_MIN_V, Config::LOW_CUT_VOLTAGE_MAX_V)) {
+            return false;
+        }
+        c.lowCutVoltageV = floatValue;
         batteryMeter.setConfig(c);
         return true;
     }
     if (key == "fullVoltageV") {
-        c.fullVoltageV = clampFloat(floatValue, 1.0f, 60.0f);
+        if (!requireRange(Config::FULL_VOLTAGE_MIN_V, Config::FULL_VOLTAGE_MAX_V)) {
+            return false;
+        }
+        c.fullVoltageV = floatValue;
         batteryMeter.setConfig(c);
         return true;
     }
     if (key == "fullCurrentA") {
-        c.fullCurrentA = clampFloat(floatValue, 0.01f, 20.0f);
-        batteryMeter.setConfig(c);
-        return true;
-    }
-    if (key == "chargeEfficiency") {
-        c.chargeEfficiency = clampFloat(floatValue, 0.50f, 1.0f);
+        if (!requireRange(Config::FULL_CURRENT_MIN_A, Config::FULL_CURRENT_MAX_A)) {
+            return false;
+        }
+        c.fullCurrentA = floatValue;
         batteryMeter.setConfig(c);
         return true;
     }
     if (key == "lowSocPercent") {
-        c.lowSocPercent = clampFloat(floatValue, 0.0f, 100.0f);
-        batteryMeter.setConfig(c);
-        return true;
-    }
-    if (key == "criticalSocPercent") {
-        c.criticalSocPercent = clampFloat(floatValue, 0.0f, 100.0f);
-        batteryMeter.setConfig(c);
-        return true;
-    }
-    if (key == "learningEndVoltageV") {
-        c.learningEndVoltageV = clampFloat(floatValue, 1.0f, 60.0f);
-        batteryMeter.setConfig(c);
-        return true;
-    }
-    if (key == "learningMinDischargeWh") {
-        c.learningMinDischargeWh = clampFloat(floatValue, 1.0f, 5000.0f);
+        if (!requireRange(Config::LOW_SOC_PERCENT_MIN, Config::LOW_SOC_PERCENT_MAX)) {
+            return false;
+        }
+        c.lowSocPercent = floatValue;
         batteryMeter.setConfig(c);
         return true;
     }
     if (key == "learningCorrectionAlpha") {
-        c.learningCorrectionAlpha = clampFloat(floatValue, 0.01f, 1.0f);
+        if (!requireRange(
+            Config::LEARNING_CORRECTION_ALPHA_MIN,
+            Config::LEARNING_CORRECTION_ALPHA_MAX
+        )) {
+            return false;
+        }
+        c.learningCorrectionAlpha = floatValue;
         batteryMeter.setConfig(c);
         return true;
     }
     if (key == "powerLimitW") {
-        c.powerLimitW = clampFloat(floatValue, 5.0f, 2000.0f);
+        if (!requireRange(Config::POWER_LIMIT_MIN_W, Config::POWER_LIMIT_MAX_W)) {
+            return false;
+        }
+        c.powerLimitW = floatValue;
         batteryMeter.setConfig(c);
         return true;
     }
     if (key == "etaAveragingSeconds") {
-        c.etaAveragingSeconds = clampFloat(floatValue, 5.0f, 300.0f);
+        if (!requireRange(Config::ETA_AVERAGING_MIN_SECONDS, Config::ETA_AVERAGING_MAX_SECONDS)) {
+            return false;
+        }
+        if (!Config::isEtaAveragingAllowed(floatValue)) {
+            error = "value_not_allowed";
+            return false;
+        }
+        c.etaAveragingSeconds = floatValue;
         batteryMeter.setConfig(c);
         return true;
     }
     if (key == "etaIdleHoldSeconds") {
-        c.etaIdleHoldSeconds = clampFloat(floatValue, 0.0f, 120.0f);
-        batteryMeter.setConfig(c);
-        return true;
-    }
-    if (key == "etaMinPowerW") {
-        c.etaMinPowerW = clampFloat(floatValue, Config::POWER_DEADZONE_W, 100.0f);
-        batteryMeter.setConfig(c);
-        return true;
-    }
-    if (key == "etaMaxHours") {
-        c.etaMaxHours = clampFloat(floatValue, 1.0f, 1000.0f);
+        if (!requireRange(Config::ETA_IDLE_HOLD_MIN_SECONDS, Config::ETA_IDLE_HOLD_MAX_SECONDS)) {
+            return false;
+        }
+        c.etaIdleHoldSeconds = floatValue;
         batteryMeter.setConfig(c);
         return true;
     }
     if (key == "smallScreenTimeoutSec") {
-        persistentData.uiConfig.smallScreenTimeoutSec = static_cast<uint16_t>(constrain(intValue, 5, 3600));
+        if (!requireRange(
+            static_cast<float>(Config::SCREEN_TIMEOUT_MIN_SEC),
+            static_cast<float>(Config::SCREEN_TIMEOUT_MAX_SEC)
+        )) {
+            return false;
+        }
+        if (!isWholeNumber(floatValue)) {
+            error = "integer_required";
+            return false;
+        }
+        uint32_t timeoutSec = static_cast<uint32_t>(floatValue);
+        if (!Config::isScreenTimeoutAllowed(timeoutSec)) {
+            error = "value_not_allowed";
+            return false;
+        }
+        persistentData.uiConfig.smallScreenTimeoutSec = static_cast<uint16_t>(timeoutSec);
         return true;
     }
     if (key == "mainScreenTimeoutSec") {
-        persistentData.uiConfig.mainScreenTimeoutSec = static_cast<uint16_t>(constrain(intValue, 5, 3600));
+        if (!requireRange(
+            static_cast<float>(Config::SCREEN_TIMEOUT_MIN_SEC),
+            static_cast<float>(Config::SCREEN_TIMEOUT_MAX_SEC)
+        )) {
+            return false;
+        }
+        if (!isWholeNumber(floatValue)) {
+            error = "integer_required";
+            return false;
+        }
+        uint32_t timeoutSec = static_cast<uint32_t>(floatValue);
+        if (!Config::isScreenTimeoutAllowed(timeoutSec)) {
+            error = "value_not_allowed";
+            return false;
+        }
+        persistentData.uiConfig.mainScreenTimeoutSec = static_cast<uint16_t>(timeoutSec);
         return true;
     }
 
-    error = "unknown_setting";
+    CoolingConfig nextCoolingConfig = coolingConfig;
+    bool coolingSetting = true;
+
+    if (key == "fanMinPercent") {
+        if (!requireRange(Config::FAN_MIN_PERCENT_MIN, Config::FAN_MIN_PERCENT_MAX)) {
+            return false;
+        }
+        nextCoolingConfig.fanMinPercent = floatValue;
+    } else if (key == "fanStartPercent") {
+        if (!requireRange(Config::FAN_START_PERCENT_MIN, Config::FAN_START_PERCENT_MAX)) {
+            return false;
+        }
+        nextCoolingConfig.fanStartPercent = floatValue;
+    } else if (key == "fanStartBoostMs") {
+        if (!requireRange(
+            static_cast<float>(Config::FAN_START_BOOST_MIN_MS),
+            static_cast<float>(Config::FAN_START_BOOST_MAX_MS)
+        )) {
+            return false;
+        }
+        if (!isWholeNumber(floatValue)) {
+            error = "integer_required";
+            return false;
+        }
+        nextCoolingConfig.fanStartBoostMs = static_cast<uint32_t>(floatValue);
+    } else if (key == "fanOffTemperatureC") {
+        if (!requireRange(Config::FAN_TEMPERATURE_MIN_C, Config::FAN_TEMPERATURE_MAX_C)) {
+            return false;
+        }
+        nextCoolingConfig.fanOffTemperatureC = floatValue;
+    } else if (key == "fanOnTemperatureC") {
+        if (!requireRange(Config::FAN_TEMPERATURE_MIN_C, Config::FAN_TEMPERATURE_MAX_C)) {
+            return false;
+        }
+        nextCoolingConfig.fanOnTemperatureC = floatValue;
+    } else if (key == "fanFullTemperatureC") {
+        if (!requireRange(Config::FAN_TEMPERATURE_MIN_C, Config::FAN_TEMPERATURE_MAX_C)) {
+            return false;
+        }
+        nextCoolingConfig.fanFullTemperatureC = floatValue;
+    } else {
+        coolingSetting = false;
+    }
+
+    if (coolingSetting) {
+        if (
+            nextCoolingConfig.fanStartPercent < nextCoolingConfig.fanMinPercent
+            || nextCoolingConfig.fanOffTemperatureC >= nextCoolingConfig.fanOnTemperatureC
+            || nextCoolingConfig.fanOnTemperatureC >= nextCoolingConfig.fanFullTemperatureC
+        ) {
+            error = "invalid_setting_relation";
+            return false;
+        }
+
+        coolingConfig = nextCoolingConfig;
+        cooling.setConfig(coolingConfig);
+        coolingConfig = cooling.getConfig();
+        return true;
+    }
+
+    error = key == "chargeEfficiency"
+        ? "read_only_auto_setting"
+        : "unknown_setting";
     return false;
 }

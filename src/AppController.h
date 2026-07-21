@@ -12,10 +12,12 @@
 #include "StatusLed.h"
 #include "DisplayManager.h"
 #include "BlePowerService.h"
+#include "CoolingController.h"
 
 class AppController {
     static void ledTask(void *param);
     TaskHandle_t ledTaskHandle = nullptr;
+
 public:
     void begin();
     void update();
@@ -36,8 +38,10 @@ private:
     StatusLed statusLed;
     DisplayManager displays;
     BlePowerService ble;
+    CoolingController cooling;
 
     PersistentData persistentData;
+    CoolingConfig coolingConfig;
     SaveConfig saveConfig;
 
     SystemState systemState = SystemState::Off;
@@ -51,6 +55,10 @@ private:
 
     bool bluetoothConnected = false;
     bool previousBluetoothConnected = false;
+    uint32_t bleWaitingStartedMs = 0;
+
+    uint32_t systemIdleTimeoutSec = 0;
+    uint32_t systemIdleStartedMs = 0;
 
     MainPage mainPage = MainPage::BatPower;
 
@@ -73,6 +81,8 @@ private:
 
     void updatePowerState();
     void updateSystemProtection();
+    void updateSystemIdleTimeout();
+    void markSystemActivity();
 
     void updateSmallDisplayState();
     void updateMainDisplayState();
@@ -90,7 +100,7 @@ private:
     void handleScreenLong();
 
     void powerSystemOn(const char *eventName = "POWER ON");
-    void powerSystemOff();
+    void powerSystemOff(const char *eventName = "POWER OFF");
     void shutdownByProtection(const String &eventName);
 
     void wakeSmallDisplay();

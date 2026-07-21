@@ -1,209 +1,258 @@
-# Powerbank BLE API v2
+# PowerStation BLE API
 
-## GATT
+Версия API: **7**
 
-- Device name: `Powerbank`
-- Service UUID: `6f2a0001-5a3d-4e2c-9a73-1b21d9b00001`
-- Status characteristic: `6f2a0002-5a3d-4e2c-9a73-1b21d9b00001`
-  - properties: Read, Notify
-- Command characteristic: `6f2a0003-5a3d-4e2c-9a73-1b21d9b00001`
-  - properties: Write, Write Without Response
+Версия прошивки: **2.7.0**
 
-Commands are UTF-8 text. Responses and periodic notifications are JSON through the status characteristic.
+Этот файл является контрактом для интеграции приложения. Прошивка передаёт через BLE только ключи и значения переменных. Названия, описания, диапазоны, значения по умолчанию и пресеты через API не передаются — приложение должно брать их из этой документации.
 
-## Status
+## 1. Общие правила
 
-Send:
+- Устройство рекламируется с именем `PowerBank`.
+- Команды передаются как текст UTF-8 без завершающего перевода строки.
+- Ответы и уведомления передаются как JSON UTF-8.
+- Имена команд и переменных чувствительны к регистру.
+- Десятичный разделитель — точка.
+- Рекомендуемый MTU — `517`.
+- Максимальный размер одного JSON-ответа — `512` байт.
+- Все ограничения проверяются прошивкой. Недопустимое значение отклоняется и не изменяет сохранённую конфигурацию.
+
+## 2. GATT
+
+Сервис:
 
 ```text
-status
+6f2a0001-5a3d-4e2c-9a73-1b21d9b00001
 ```
 
-or:
+| Назначение | UUID | Свойства |
+|---|---|---|
+| Статус, результаты команд и ошибки | `6f2a0002-5a3d-4e2c-9a73-1b21d9b00001` | Read, Notify |
+| Команды | `6f2a0003-5a3d-4e2c-9a73-1b21d9b00001` | Write, Write Without Response |
+| Актуальные настройки | `6f2a0004-5a3d-4e2c-9a73-1b21d9b00001` | Read, Notify |
 
-```text
-get status
-```
+`status` автоматически отправляется раз в секунду. `settings` отправляется после успешного изменения конфигурации и после автоматического изменения коэффициента зарядки.
 
-Example response:
+## 3. Подключение приложения
+
+1. Подключиться к устройству `PowerBank`.
+2. Запросить MTU 517.
+3. Найти сервис и три характеристики.
+4. Подписаться на уведомления `status` и `settings`.
+5. Прочитать обе характеристики или отправить `get all`.
+6. Проверить `apiVersion`. Если приложение не поддерживает полученную версию, не разрешать изменение настроек.
+7. Строить интерфейс по таблицам из разделов 6 и 7 этого документа.
+
+## 4. Телеметрия `status`
+
+Пример:
 
 ```json
 {
   "type": "status",
-  "apiVersion": 2,
+  "apiVersion": 7,
+  "firmwareVersion": "2.7.0",
   "systemState": "ON",
   "powerState": "DISCHARGE",
-  "socPercent": 74.28,
+  "socPercent": 76.42,
   "voltageV": 12.841,
-  "currentA": -4.102,
-  "powerW": -52.672,
-  "averagedPowerW": -49.834,
-  "currentStoredWh": 334.260,
-  "learnedCapacityWh": 450.000,
-  "nominalCapacityWh": 450.000,
-  "estimatedTimeHours": 6.707,
+  "currentA": -4.218,
+  "powerW": -54.164,
+  "averagedPowerW": -51.732,
+  "currentStoredWh": 382.100,
+  "learnedCapacityWh": 500.000,
+  "estimatedTimeHours": 7.383,
   "learningActive": false,
   "learningDischargeWh": 0.000,
   "learnedCycles": 2,
+  "tempPowerC": 48.31,
+  "tempAirC": 31.72,
+  "fanPercent": 61,
+  "thermalFault": false,
   "mosfetEnabled": true,
   "bluetoothEnabled": true,
-  "bluetoothConnected": true,
-  "settings": {
-    "lowCutVoltageV": 9.800,
-    "fullVoltageV": 14.200,
-    "fullCurrentA": 0.150,
-    "chargeEfficiency": 0.950,
-    "lowSocPercent": 15.00,
-    "criticalSocPercent": 3.00,
-    "learningEndVoltageV": 10.400,
-    "learningMinDischargeWh": 50.00,
-    "learningCorrectionAlpha": 0.250,
-    "powerLimitW": 120.00,
-    "etaPowerAlpha": 0.080,
-    "etaMinPowerW": 3.00,
-    "etaMaxHours": 168.00,
-    "smallScreenTimeoutSec": 30,
-    "mainScreenTimeoutSec": 30
-  }
+  "bluetoothConnected": true
 }
 ```
 
-`powerW` is instantaneous power. `averagedPowerW` is filtered power used for ETA. `estimatedTimeHours = -1` means ETA is unavailable or the station is idle.
+Особые значения:
 
-## Change a setting
+- `estimatedTimeHours = -1` — ETA недоступно;
+- `tempPowerC = null` или `tempAirC = null` — соответствующий датчик неисправен или его показание недостоверно;
+- `thermalFault = true` — контроллер охлаждения обнаружил проблему и включает вентилятор на 100%;
+- `currentA` и `powerW` положительные при зарядке и отрицательные при разрядке.
 
-Format:
+## 5. Актуальные настройки `settings`
+
+Пример:
+
+```json
+{
+  "type": "settings",
+  "apiVersion": 7,
+  "lowCutVoltageV": 11.000,
+  "fullVoltageV": 14.800,
+  "fullCurrentA": 0.200,
+  "chargeEfficiency": 0.950,
+  "lowSocPercent": 15.00,
+  "learningCorrectionAlpha": 0.250,
+  "powerLimitW": 100.00,
+  "etaAveragingSeconds": 30.0,
+  "etaIdleHoldSeconds": 10.0,
+  "smallScreenTimeoutSec": 30,
+  "mainScreenTimeoutSec": 30,
+  "fanMinPercent": 40.0,
+  "fanStartPercent": 80.0,
+  "fanStartBoostMs": 1000,
+  "fanOffTemperatureC": 38.0,
+  "fanOnTemperatureC": 42.0,
+  "fanFullTemperatureC": 60.0
+}
+```
+
+`chargeEfficiency` — информационное read-only значение. Прошивка рассчитывает и сохраняет его автоматически.
+
+Текущие значения `currentStoredWh` и `learnedCapacityWh` находятся в `status`, хотя их разрешено изменять командой `set`.
+
+## 6. Редактируемые параметры
+
+Колонка «Источник» указывает JSON, из которого приложение должно читать фактически применённое значение.
+
+| Переменная | Название | Описание | Тип | Источник | Минимум | Максимум | Дефолт | Допустимые значения / пресеты |
+|---|---|---|---|---|---:|---:|---:|---|
+| `smallScreenTimeoutSec` | Тайм-аут маленького экрана | Через сколько секунд бездействия выключать маленький экран. | integer, s | `settings` | 10 | 900 | 30 | Только `10, 30, 60, 300, 900` |
+| `mainScreenTimeoutSec` | Тайм-аут большого экрана | Через сколько секунд бездействия выключать большой экран. | integer, s | `settings` | 10 | 900 | 30 | Только `10, 30, 60, 300, 900` |
+| `lowSocPercent` | Индикация низкого заряда | Порог включения предупреждения о низком заряде. | number, % | `settings` | 5 | 50 | 15 | Рекомендуемый шаг 1 |
+| `powerLimitW` | Лимит мощности | Мощность разряда, при превышении которой отключается выход. | number, W | `settings` | 20 | 300 | 100 | Рекомендуемый шаг 5 |
+| `lowCutVoltageV` | Нижний порог напряжения | Напряжение отключения выхода для защиты аккумуляторов. | number, V | `settings` | 8.00 | 12.00 | 11.00 | Рекомендуемый шаг 0.05 |
+| `currentStoredWh` | Текущий запас энергии | Ручная коррекция расчётного остатка энергии. | number, Wh | `status` | 0 | `min(learnedCapacityWh, 500)` | `min(learnedCapacityWh, 500)` | Рекомендуемый шаг 1 |
+| `fullVoltageV` | Напряжение полного заряда | Минимальное напряжение для распознавания полного заряда. | number, V | `settings` | 13.60 | 14.80 | 14.80 | Рекомендуемый шаг 0.05 |
+| `fullCurrentA` | Ток завершения зарядки | Максимальный ток, при котором заряд считается завершённым. | number, A | `settings` | 0.05 | 2.00 | 0.20 | Рекомендуемый шаг 0.05 |
+| `etaAveragingSeconds` | Усреднение мощности | Период сглаживания мощности, используемой при расчёте ETA. | number, s | `settings` | 15 | 120 | 30 | Только `15, 30, 45, 60, 120` |
+| `etaIdleHoldSeconds` | Удержание ETA в простое | Сколько сохранять ETA при кратковременном переходе в простой. | number, s | `settings` | 0 | 120 | 10 | Пресеты `0, 10, 15, 30, 60`; разрешён весь диапазон |
+| `learnedCapacityWh` | Обученная ёмкость | Фактическая ёмкость, используемая для расчёта заряда и ETA. | number, Wh | `status` | 150 | 500 | 500 | Рекомендуемый шаг 1 |
+| `learningCorrectionAlpha` | Сила коррекции ёмкости | Доля результата нового цикла в обновлении обученной ёмкости. | number | `settings` | 0.05 | 0.50 | 0.25 | Рекомендуемый шаг 0.05 |
+| `fanMinPercent` | Минимальная скорость вентилятора | Минимальная мощность вентилятора после успешного запуска. | number, % | `settings` | 20 | 100 | 40 | Рекомендуемый шаг 1 |
+| `fanStartPercent` | Стартовая скорость вентилятора | Мощность вентилятора во время стартового импульса. | number, % | `settings` | 40 | 100 | 80 | Рекомендуемый шаг 1 |
+| `fanStartBoostMs` | Длительность стартового импульса | Время повышенной мощности при каждом запуске вентилятора. | integer, ms | `settings` | 100 | 5000 | 1000 | Рекомендуемый шаг 100 |
+| `fanOffTemperatureC` | Температура выключения вентилятора | Ниже этой температуры вентилятор выключается. | number, °C | `settings` | 0 | 100 | 38 | Рекомендуемый шаг 1 |
+| `fanOnTemperatureC` | Температура включения вентилятора | При этой температуре начинается охлаждение. | number, °C | `settings` | 0 | 100 | 42 | Рекомендуемый шаг 1 |
+| `fanFullTemperatureC` | Температура максимальной скорости | При этой температуре вентилятор переходит на 100%. | number, °C | `settings` | 0 | 100 | 60 | Рекомендуемый шаг 1 |
+
+Дополнительные обязательные отношения:
+
+```text
+fanStartPercent >= fanMinPercent
+fanOffTemperatureC < fanOnTemperatureC < fanFullTemperatureC
+```
+
+Рекомендуемый шаг определяет интерфейс приложения, но прошивка принимает любое число внутри диапазона. Строки с пометкой «Только» являются строгим списком допустимых значений. `fanStartBoostMs` и тайм-ауты экранов должны быть целыми числами.
+
+## 7. Информационные поля
+
+| Переменная | Название | Описание | Тип / единица | Источник |
+|---|---|---|---|---|
+| `firmwareVersion` | Версия прошивки | Установленная версия программного обеспечения станции. | string | `status` |
+| `systemState` | Состояние станции | Программное состояние силового выхода: `ON` или `OFF`. | string | `status` |
+| `powerState` | Направление энергии | Текущий режим: `CHARGE`, `DISCHARGE` или `IDLE`. | string | `status` |
+| `socPercent` | Уровень заряда | Расчётный остаток заряда аккумуляторов. | number, % | `status` |
+| `voltageV` | Напряжение аккумуляторов | Измеренное напряжение аккумуляторной сборки. | number, V | `status` |
+| `currentA` | Ток | Измеренный ток; знак показывает направление энергии. | number, A | `status` |
+| `powerW` | Мгновенная мощность | Текущая мощность без сглаживания. | number, W | `status` |
+| `averagedPowerW` | Усреднённая мощность | Сглаженная мощность, используемая для расчёта ETA. | number, W | `status` |
+| `currentStoredWh` | Текущий запас энергии | Расчётное количество энергии в аккумуляторах. | number, Wh | `status` |
+| `learnedCapacityWh` | Обученная ёмкость | Текущая фактическая ёмкость для расчёта SoC. | number, Wh | `status` |
+| `chargeEfficiency` | Коэффициент зарядки | Автоматически рассчитанная эффективность зарядки аккумуляторов. | number | `settings` |
+| `estimatedTimeHours` | Оставшееся время | Расчётное время до полного заряда или разряда; `-1` означает, что ETA недоступно. | number, h | `status` |
+| `tempPowerC` | Температура силового модуля | Температура радиатора по медному NTC; при ошибке `null`. | number/null, °C | `status` |
+| `tempAirC` | Температура выходящего воздуха | Температура воздуха на выходе по пластиковому NTC; при ошибке `null`. | number/null, °C | `status` |
+| `fanPercent` | Мощность вентилятора | Текущее заполнение PWM вентилятора. | integer, % | `status` |
+| `thermalFault` | Ошибка охлаждения | Неисправность или недостоверное показание хотя бы одного датчика температуры. | boolean | `status` |
+| `learningActive` | Обучение ёмкости | Показывает, выполняется ли сейчас цикл обучения ёмкости. | boolean | `status` |
+| `learningDischargeWh` | Энергия цикла обучения | Энергия, отданная в текущем цикле обучения. | number, Wh | `status` |
+| `learnedCycles` | Завершённые циклы обучения | Количество успешно завершённых циклов обучения ёмкости. | integer | `status` |
+| `mosfetEnabled` | Силовой выход | Фактическое логическое состояние выходного MOSFET. | boolean | `status` |
+| `bluetoothEnabled` | Bluetooth включён | Доступен ли BLE станции для подключения и обмена. | boolean | `status` |
+| `bluetoothConnected` | Bluetooth подключён | Есть ли активное BLE-соединение. | boolean | `status` |
+
+Служебные поля `type` и `apiVersion` используются для маршрутизации сообщения и проверки совместимости, но не являются пользовательскими информационными полями.
+
+## 8. Изменение параметров
+
+Формат:
 
 ```text
 set key=value
 ```
 
-Example:
+Примеры:
 
 ```text
-set powerLimitW=140
+set powerLimitW=120
+set currentStoredWh=350
+set fanMinPercent=40
+set fanStartPercent=80
+set fanStartBoostMs=1000
+set fanOnTemperatureC=42
 ```
 
-Successful result:
+После успешного `set` прошивка сразу применяет и сохраняет значение. Приложение должно дождаться `result` и затем использовать фактическое значение из указанного в таблице источника.
+
+Успех:
 
 ```json
-{"type":"result","command":"set powerLimitW=140","ok":true}
+{"type":"result","command":"set fanMinPercent=40","ok":true}
 ```
 
-Error result:
+Ошибка валидации:
 
 ```json
-{"type":"result","command":"set unknown=1","ok":false,"error":"unknown_setting"}
+{"type":"result","command":"set fanMinPercent=10","ok":false,"error":"value_out_of_range"}
 ```
 
-A successful `set` is immediately saved to NVS.
+`chargeEfficiency` нельзя менять вручную:
 
-## Settings recommended for the mobile application
-
-### Basic battery settings
-
-| Key | Meaning | Accepted range |
-|---|---|---:|
-| `nominalCapacityWh` | Rated battery capacity | 1–5000 Wh |
-| `learnedCapacityWh` | Learned/actual capacity | limited by firmware min/max capacity |
-| `remainingPercent` | Manually set current charge | 0–100% |
-| `currentStoredWh` | Manually set stored energy | 0–learned capacity |
-| `lowCutVoltageV` | Emergency low-voltage shutdown | 1–60 V |
-| `fullVoltageV` | Full-charge detection voltage | 1–60 V |
-| `fullCurrentA` | Full-charge current threshold | 0.01–20 A |
-| `chargeEfficiency` | Charging efficiency coefficient | 0.50–1.00 |
-| `powerLimitW` | Overload shutdown threshold | 5–2000 W |
-
-For the normal app UI, show `nominalCapacityWh`, `remainingPercent`, `lowCutVoltageV`, `fullVoltageV`, `fullCurrentA`, `chargeEfficiency`, and `powerLimitW`. Put `learnedCapacityWh` and `currentStoredWh` in an advanced/service section because changing them directly affects SoC calculations.
-
-### Protection and indication
-
-| Key | Meaning | Accepted range |
-|---|---|---:|
-| `lowSocPercent` | Low-battery LED threshold | 0–100% |
-| `criticalSocPercent` | Shutdown threshold by SoC | 0–100% |
-| `smallScreenTimeoutSec` | Narrow OLED idle timeout | 5–3600 s |
-| `mainScreenTimeoutSec` | Main OLED timeout | 5–3600 s |
-
-The app should validate that `criticalSocPercent <= lowSocPercent` before sending values.
-
-### Capacity learning
-
-| Key | Meaning | Accepted range |
-|---|---|---:|
-| `learningEndVoltageV` | Voltage ending a learning discharge | 1–60 V |
-| `learningMinDischargeWh` | Minimum energy for a valid learning cycle | 1–5000 Wh |
-| `learningCorrectionAlpha` | Capacity correction strength | 0.01–1.00 |
-
-These belong in an advanced section.
-
-### ETA smoothing
-
-| Key | Meaning | Accepted range |
-|---|---|---:|
-| `etaPowerAlpha` | EMA response coefficient | 0.01–1.00 |
-| `etaMinPowerW` | Minimum power for ETA calculation | 2–100 W |
-| `etaMaxHours` | Maximum displayed ETA | 1–1000 h |
-
-Recommended default: `etaPowerAlpha=0.08`. Lower values produce steadier but slower ETA. Higher values react faster but jump more.
-
-## Service commands
-
-```text
-save
+```json
+{"type":"result","command":"set chargeEfficiency=0.9","ok":false,"error":"read_only_auto_setting"}
 ```
 
-Forces immediate NVS save.
+## 9. Команды
 
-```text
-markFull
-```
+| Команда | Результат |
+|---|---|
+| `status`, `get status` | Немедленно отправить `status`. |
+| `settings`, `get settings` | Немедленно отправить `settings`. |
+| `all`, `get all` | Отправить `settings` и `status`. |
+| `set key=value` | Проверить, применить и сохранить редактируемый параметр. |
+| `save` | Принудительно сохранить состояние и настройки. |
+| `markFull` | Установить текущий запас равным обученной ёмкости и начать обучение. |
+| `resetLearning` | Остановить текущий цикл обучения и очистить его промежуточный результат. |
 
-Sets stored energy to learned capacity and starts a capacity-learning cycle.
+## 10. Ошибки
 
-```text
-resetLearning
-```
+| Код | Причина |
+|---|---|
+| `empty_command` | Пустая команда. |
+| `unknown_command` | Неизвестная команда. |
+| `expected_key_equals_value` | В `set` отсутствует корректное `key=value`. |
+| `empty_value` | Значение отсутствует. |
+| `invalid_number` | Значение не является конечным числом. |
+| `integer_required` | Для целочисленного параметра передано дробное значение. |
+| `value_out_of_range` | Число находится вне документированного диапазона. |
+| `value_not_allowed` | Число входит в диапазон, но отсутствует в строгом списке допустимых значений. |
+| `invalid_setting_relation` | Нарушено отношение между параметрами вентилятора. |
+| `unknown_setting` | Ключ отсутствует в таблице редактируемых параметров. |
+| `read_only_auto_setting` | Попытка изменить автоматически рассчитываемое поле. |
+| `response_too_large` | JSON превысил лимит BLE-ответа. |
 
-Clears current learning state and the last correction data.
+При любой ошибке команда не меняет и не сохраняет значение.
 
-## Error codes
+## 11. Требования к приложению
 
-- `empty_command`
-- `unknown_command`
-- `expected_key_equals_value`
-- `empty_value`
-- `invalid_number`
-- `unknown_setting`
-
-## Mobile-app behavior
-
-1. Subscribe to status notifications before sending commands.
-2. Send `status` after connecting.
-3. Use `type` to distinguish periodic `status` messages from command `result` messages.
-4. After a successful setting change, either update the local model optimistically or request `status` again.
-5. Treat BLE loss as normal when the user disables Bluetooth from the station button.
-
-## Стабилизация ETA — firmware 2.2
-
-Новые параметры в объекте `settings`:
-
-- `etaAveragingSeconds` — постоянная времени усреднения мощности, диапазон 5–300 секунд, по умолчанию 45.
-- `etaIdleHoldSeconds` — сколько сохранять среднее и последнее ETA при кратком IDLE, диапазон 0–120 секунд, по умолчанию 15.
-- `etaMaxChangeMinutesPerSecond` — максимальная скорость изменения отображаемого ETA, диапазон 0.1–60 минут ETA за секунду реального времени, по умолчанию 2.
-
-Примеры команд:
-
-```text
-set etaAveragingSeconds=60
-set etaIdleHoldSeconds=20
-set etaMaxChangeMinutesPerSecond=1
-```
-
-Рекомендуемые значения для ноутбука или другой импульсной нагрузки:
-
-```text
-etaAveragingSeconds=45
-etaIdleHoldSeconds=15
-etaMaxChangeMinutesPerSecond=2
-```
+1. Сформировать экраны, названия, подсказки, лимиты, дефолты и пресеты по этому документу.
+2. Не ожидать метаданные интерфейса от устройства: BLE API передаёт только переменные и их значения.
+3. Проверять пользовательский ввод до отправки, но считать проверку прошивки окончательной.
+4. После `set` дождаться `result.ok=true` и принять значение из `settings` или следующего `status` согласно колонке «Источник».
+5. При изменении `learnedCapacityWh` учитывать, что `currentStoredWh` автоматически ограничивается новой ёмкостью.
+6. При изменении связанных параметров вентилятора соблюдать их отношения; если нужно повысить и минимум, и стартовую скорость, сначала повысить `fanStartPercent`.
+7. Сопоставлять реализацию приложения с `apiVersion`. Для другой версии API использовать соответствующую версию документации.
