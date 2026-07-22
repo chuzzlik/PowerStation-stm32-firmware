@@ -60,7 +60,13 @@ struct BatteryConfig {
     float nominalCapacityWh = 450.0f;
     float learnedCapacityWh = 500.0f;
 
-    float lowCutVoltageV = 11.0f;
+    // Обучение завершается на том же настраиваемом пороге,
+    // на котором защита отключает выход.
+    union {
+        float lowCutVoltageV = 11.0f;
+        float learningEndVoltageV;
+    };
+
     float fullVoltageV = 14.8f;
     float fullCurrentA = 0.2f;
 
@@ -68,7 +74,8 @@ struct BatteryConfig {
     float lowSocPercent = 15.0f;
     float criticalSocPercent = 3.0f;
 
-    float learningEndVoltageV = 10.4f;
+    // Сохраняет прежний размер и расположение PersistentData.
+    float reservedLegacyLearningEndVoltageV = 10.4f;
     float learningMinDischargeWh = 50.0f;
     float learningCorrectionAlpha = 0.25f;
 
