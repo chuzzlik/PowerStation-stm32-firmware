@@ -302,6 +302,10 @@ void AppController::updateSystemProtection() {
     BatteryState battery = batteryMeter.getState();
     BatteryConfig config = batteryMeter.getConfig();
 
+    if (battery.outputDisabledByProtection) {
+        return;
+    }
+
     if (battery.powerState == PowerState::Charge) {
         return;
     }
@@ -634,8 +638,12 @@ void AppController::shutdownByProtection(const String &eventName) {
     systemIdleStartedMs = 0;
     batteryMeter.markOutputDisabledByProtection();
 
+    // Защита блокирует только силовые выходы. Контроллер, BLE и UI
+    // продолжают работать до обычного выключения или idle-тайм-аута.
     mosfetOutput.disable();
-    systemState = SystemState::Off;
+
+    // После неожиданного перезапуска не включаем нагрузку автоматически,
+    // пока пользователь явно не выполнит полный цикл OFF -> ON.
     persistentData.systemWasOn = false;
 
     requestForceSave();
@@ -643,8 +651,9 @@ void AppController::shutdownByProtection(const String &eventName) {
 
     setLastEvent(eventName);
 
+    // Маленький экран показывает блокировку. Большой экран и его
+    // текущая страница остаются в прежнем состоянии.
     wakeSmallDisplay();
-    wakeMainDisplay(MainPage::BatPower, true);
 }
 
 void AppController::wakeSmallDisplay() {

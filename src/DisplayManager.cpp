@@ -157,7 +157,11 @@ void DisplayManager::renderSmall(
 
     String bottomRightText;
 
-    if (systemOff) {
+    if (battery.outputDisabledByProtection) {
+        if ((animationFrame % 2) == 0) {
+            bottomRightText = "PROT";
+        }
+    } else if (systemOff) {
         if ((animationFrame % 2) == 0) {
             bottomRightText = "OFF";
         }
