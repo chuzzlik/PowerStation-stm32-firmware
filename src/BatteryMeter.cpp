@@ -183,9 +183,9 @@ void BatteryMeter::markFullCharge() {
     fullChargeLatched = true;
     fullConditionActive = false;
 
-    if (!state.learningActive) {
-        startLearning(hasLastSample ? lastSample.timeMs : millis());
-    }
+    // Полный заряд всегда открывает новый чистый цикл обучения.
+    // Это также сбрасывает зависшее или накопленное от старого цикла значение.
+    startLearning(hasLastSample ? lastSample.timeMs : millis());
 
     updateSoc();
     updateEstimatedTime(millis());
@@ -204,6 +204,13 @@ void BatteryMeter::resetLearning() {
 
 void BatteryMeter::markOutputDisabledByProtection() {
     state.outputDisabledByProtection = true;
+
+    // Защита может отключить нагрузку раньше следующего измерения,
+    // после чего режим уже станет IDLE и напряжение восстановится.
+    // Завершаем обучение по последнему низковольтному измерению сразу.
+    if (state.learningActive && isLearningFinished()) {
+        finishLearning(hasLastSample ? lastSample.timeMs : millis());
+    }
 }
 
 void BatteryMeter::clearOutputDisabledByProtection() {
@@ -223,7 +230,10 @@ void BatteryMeter::integrateEnergy(const PowerSample &sample, float dtHours) {
         float usedWh = fabsf(powerW) * dtHours;
 
         state.currentStoredWh -= usedWh;
-        state.learningDischargeWh += usedWh;
+
+        if (state.learningActive) {
+            state.learningDischargeWh += usedWh;
+        }
 
         service.totalDischargeWh += usedWh;
     } else if (state.powerState == PowerState::Charge) {
@@ -518,9 +528,10 @@ bool BatteryMeter::isFullChargeCondition() const {
 bool BatteryMeter::isLearningFinished() const {
     bool voltageIsLow = state.voltageV > 1.0f && state.voltageV <= config.learningEndVoltageV;
     bool enoughEnergyMeasured = state.learningDischargeWh >= config.learningMinDischargeWh;
-    bool isDischarging = state.powerState == PowerState::Discharge;
+    bool dischargeIsActiveOrJustStopped =
+        state.powerState == PowerState::Discharge || state.outputDisabledByProtection;
 
-    return voltageIsLow && enoughEnergyMeasured && isDischarging;
+    return voltageIsLow && enoughEnergyMeasured && dischargeIsActiveOrJustStopped;
 }
 
 void BatteryMeter::startLearning(uint32_t timeMs) {
