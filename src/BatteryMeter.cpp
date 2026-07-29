@@ -3,6 +3,10 @@
 #include "Utils.h"
 #include <math.h>
 
+namespace {
+    constexpr float FULL_CHARGE_IDLE_VOLTAGE_HYSTERESIS_V = 0.10f;
+}
+
 void BatteryMeter::begin(const BatteryConfig &config, float initialStoredWh) {
     this->config = config;
     sanitizeConfig();
@@ -45,7 +49,21 @@ void BatteryMeter::update(const PowerSample &sample) {
         }
     }
 
-    updateFullChargeDetection(sample.timeMs);
+    const bool chargeEndedAfterFullCondition =
+        previousState == PowerState::Charge
+        && state.powerState == PowerState::Idle
+        && chargeCycleActive
+        && chargeCycleValid
+        && fullConditionActive
+        && state.voltageV > 1.0f
+        && state.voltageV >= config.fullVoltageV - FULL_CHARGE_IDLE_VOLTAGE_HYSTERESIS_V
+        && fabsf(state.currentA) <= config.fullCurrentA;
+
+    if (chargeEndedAfterFullCondition) {
+        completeAutomaticFullCharge(sample.timeMs);
+    } else {
+        updateFullChargeDetection(sample.timeMs);
+    }
 
     if (state.learningActive && isLearningFinished()) {
         finishLearning(sample.timeMs);
