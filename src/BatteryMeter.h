@@ -9,10 +9,12 @@ public:
     void update(const PowerSample &sample);
 
     BatteryConfig getConfig() const;
+    PowerMeasurementConfig getPowerMeasurementConfig() const;
     BatteryState getState() const;
     BatteryServiceInfo getServiceInfo() const;
 
     void setConfig(const BatteryConfig &config);
+    void setPowerMeasurementConfig(const PowerMeasurementConfig &config);
     void setServiceInfo(const BatteryServiceInfo &service);
 
     void setLearnedCapacityWh(float capacityWh);
@@ -29,6 +31,7 @@ public:
 
 private:
     BatteryConfig config;
+    PowerMeasurementConfig powerMeasurementConfig;
     BatteryState state;
     BatteryServiceInfo service;
 
@@ -57,6 +60,7 @@ private:
     bool configChanged = false;
 
     void sanitizeConfig();
+    void sanitizePowerMeasurementConfig();
 
     void integrateEnergy(const PowerSample &sample, float dtHours);
     void updatePowerState();
