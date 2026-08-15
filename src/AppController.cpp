@@ -77,6 +77,7 @@ void AppController::begin() {
         persistentData.batteryConfig,
         persistentData.currentStoredWh
     );
+    batteryMeter.setPowerMeasurementConfig(storage.loadPowerMeasurementConfig());
 
     BatteryServiceInfo serviceInfo;
     serviceInfo.learnedCycles = persistentData.learnedCycles;
@@ -723,6 +724,7 @@ void AppController::savePersistentData() {
 
     storage.save(persistentData);
     storage.saveCoolingConfig(coolingConfig);
+    storage.savePowerMeasurementConfig(batteryMeter.getPowerMeasurementConfig());
     storage.saveSystemIdleTimeoutSec(systemIdleTimeoutSec);
 
     Serial.println("Saved");
@@ -888,6 +890,7 @@ String AppController::makeStatusJson() {
 
 String AppController::makeSettingsJson() {
     BatteryConfig config = batteryMeter.getConfig();
+    PowerMeasurementConfig measurementConfig = batteryMeter.getPowerMeasurementConfig();
 
     String json;
     json.reserve(512);
@@ -900,6 +903,8 @@ String AppController::makeSettingsJson() {
     json += "\"lowSocPercent\":" + String(config.lowSocPercent, 2) + ",";
     json += "\"learningCorrectionAlpha\":" + String(config.learningCorrectionAlpha, 3) + ",";
     json += "\"powerLimitW\":" + String(config.powerLimitW, 2) + ",";
+    json += "\"powerStateDeadzoneW\":" + String(measurementConfig.powerStateDeadzoneW, 3) + ",";
+    json += "\"energyDeadzoneW\":" + String(measurementConfig.energyDeadzoneW, 3) + ",";
     json += "\"etaAveragingSeconds\":" + String(config.etaAveragingSeconds, 1) + ",";
     json += "\"etaIdleHoldSeconds\":" + String(config.etaIdleHoldSeconds, 1) + ",";
     json += "\"smallScreenTimeoutSec\":" + String(persistentData.uiConfig.smallScreenTimeoutSec) + ",";
@@ -941,6 +946,7 @@ bool AppController::handleSetCommand(const String &expression, String &error) {
     }
 
     BatteryConfig c = batteryMeter.getConfig();
+    PowerMeasurementConfig measurementConfig = batteryMeter.getPowerMeasurementConfig();
 
     auto requireRange = [&](float minValue, float maxValue) {
         if (floatValue < minValue || floatValue > maxValue) {
@@ -1017,6 +1023,22 @@ bool AppController::handleSetCommand(const String &expression, String &error) {
         }
         c.powerLimitW = floatValue;
         batteryMeter.setConfig(c);
+        return true;
+    }
+    if (key == "powerStateDeadzoneW") {
+        if (!requireRange(Config::POWER_STATE_DEADZONE_MIN_W, Config::POWER_STATE_DEADZONE_MAX_W)) {
+            return false;
+        }
+        measurementConfig.powerStateDeadzoneW = floatValue;
+        batteryMeter.setPowerMeasurementConfig(measurementConfig);
+        return true;
+    }
+    if (key == "energyDeadzoneW") {
+        if (!requireRange(Config::ENERGY_DEADZONE_MIN_W, Config::ENERGY_DEADZONE_MAX_W)) {
+            return false;
+        }
+        measurementConfig.energyDeadzoneW = floatValue;
+        batteryMeter.setPowerMeasurementConfig(measurementConfig);
         return true;
     }
     if (key == "etaAveragingSeconds") {
