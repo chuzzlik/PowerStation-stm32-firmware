@@ -41,6 +41,21 @@ void SettingsStorage::saveCoolingConfig(const CoolingConfig &config) {
     prefs.putBytes("cooling", &config, sizeof(CoolingConfig));
 }
 
+PowerMeasurementConfig SettingsStorage::loadPowerMeasurementConfig() {
+    PowerMeasurementConfig config;
+
+    if (prefs.getBytesLength("powerMeter") != sizeof(PowerMeasurementConfig)) {
+        return config;
+    }
+
+    prefs.getBytes("powerMeter", &config, sizeof(PowerMeasurementConfig));
+    return config;
+}
+
+void SettingsStorage::savePowerMeasurementConfig(const PowerMeasurementConfig &config) {
+    prefs.putBytes("powerMeter", &config, sizeof(PowerMeasurementConfig));
+}
+
 uint32_t SettingsStorage::loadSystemIdleTimeoutSec(uint32_t defaultValue) {
     return prefs.getUInt("sysIdleSec", defaultValue);
 }
