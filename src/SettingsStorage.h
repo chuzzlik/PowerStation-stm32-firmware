@@ -13,6 +13,9 @@ public:
     CoolingConfig loadCoolingConfig();
     void saveCoolingConfig(const CoolingConfig &config);
 
+    PowerMeasurementConfig loadPowerMeasurementConfig();
+    void savePowerMeasurementConfig(const PowerMeasurementConfig &config);
+
     uint32_t loadSystemIdleTimeoutSec(uint32_t defaultValue);
     void saveSystemIdleTimeoutSec(uint32_t value);
 
