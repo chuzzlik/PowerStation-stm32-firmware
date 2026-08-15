@@ -105,6 +105,14 @@ struct CoolingConfig {
     float fanFullTemperatureC = 60.0f;
 };
 
+struct PowerMeasurementConfig {
+    // Порог определения режима Charge/Discharge/Idle.
+    float powerStateDeadzoneW = 2.0f;
+
+    // Порог, ниже которого энергия не интегрируется в Wh/SoC.
+    float energyDeadzoneW = 0.05f;
+};
+
 struct BatteryState {
     PowerState powerState = PowerState::Idle;
 
