@@ -72,7 +72,7 @@ namespace Config {
     constexpr uint32_t BLE_NOTIFY_MS = 1000;
     constexpr uint32_t BLE_WAITING_TIMEOUT_MS = 5UL * 60UL * 1000UL;
     constexpr uint16_t BLE_MTU = 517;
-    constexpr size_t BLE_MAX_VALUE_BYTES = 512;
+    constexpr size_t BLE_MAX_VALUE_BYTES = 514;
 
     constexpr uint32_t BUTTON_DEBOUNCE_MS = 40;
     constexpr uint32_t BUTTON_LONG_PRESS_MS = 900;
