@@ -10,6 +10,7 @@ namespace {
 void BatteryMeter::begin(const BatteryConfig &config, float initialStoredWh) {
     this->config = config;
     sanitizeConfig();
+    sanitizePowerMeasurementConfig();
 
     state.learnedCapacityWh = this->config.learnedCapacityWh;
     state.currentStoredWh = clampFloat(initialStoredWh, 0.0f, state.learnedCapacityWh);
@@ -81,6 +82,10 @@ BatteryConfig BatteryMeter::getConfig() const {
     return config;
 }
 
+PowerMeasurementConfig BatteryMeter::getPowerMeasurementConfig() const {
+    return powerMeasurementConfig;
+}
+
 BatteryState BatteryMeter::getState() const {
     return state;
 }
@@ -98,6 +103,11 @@ void BatteryMeter::setConfig(const BatteryConfig &config) {
 
     updateSoc();
     updateEstimatedTime(millis());
+}
+
+void BatteryMeter::setPowerMeasurementConfig(const PowerMeasurementConfig &config) {
+    powerMeasurementConfig = config;
+    sanitizePowerMeasurementConfig();
 }
 
 void BatteryMeter::sanitizeConfig() {
@@ -156,8 +166,25 @@ void BatteryMeter::sanitizeConfig() {
         Config::POWER_LIMIT_MIN_W,
         Config::POWER_LIMIT_MAX_W
     );
-    this->config.etaMinPowerW = clampFloat(this->config.etaMinPowerW, Config::POWER_DEADZONE_W, 100.0f);
+    this->config.etaMinPowerW = clampFloat(
+        this->config.etaMinPowerW,
+        Config::POWER_STATE_DEADZONE_DEFAULT_W,
+        100.0f
+    );
     this->config.etaMaxHours = clampFloat(this->config.etaMaxHours, 1.0f, 1000.0f);
+}
+
+void BatteryMeter::sanitizePowerMeasurementConfig() {
+    powerMeasurementConfig.powerStateDeadzoneW = clampFloat(
+        powerMeasurementConfig.powerStateDeadzoneW,
+        Config::POWER_STATE_DEADZONE_MIN_W,
+        Config::POWER_STATE_DEADZONE_MAX_W
+    );
+    powerMeasurementConfig.energyDeadzoneW = clampFloat(
+        powerMeasurementConfig.energyDeadzoneW,
+        Config::ENERGY_DEADZONE_MIN_W,
+        Config::ENERGY_DEADZONE_MAX_W
+    );
 }
 
 void BatteryMeter::setServiceInfo(const BatteryServiceInfo &service) {
@@ -243,8 +270,9 @@ bool BatteryMeter::consumeConfigChanged() {
 
 void BatteryMeter::integrateEnergy(const PowerSample &sample, float dtHours) {
     float powerW = sample.powerW;
+    float deadzoneW = powerMeasurementConfig.energyDeadzoneW;
 
-    if (state.powerState == PowerState::Discharge) {
+    if (powerW < -deadzoneW) {
         float usedWh = fabsf(powerW) * dtHours;
 
         state.currentStoredWh -= usedWh;
@@ -254,7 +282,7 @@ void BatteryMeter::integrateEnergy(const PowerSample &sample, float dtHours) {
         }
 
         service.totalDischargeWh += usedWh;
-    } else if (state.powerState == PowerState::Charge) {
+    } else if (powerW > deadzoneW) {
         float inputWh = powerW * dtHours;
         float chargedWh = inputWh * config.chargeEfficiency;
 
@@ -278,13 +306,15 @@ void BatteryMeter::integrateEnergy(const PowerSample &sample, float dtHours) {
 }
 
 void BatteryMeter::updatePowerState() {
-    if (state.powerW > Config::POWER_DEADZONE_W) {
+    float deadzoneW = powerMeasurementConfig.powerStateDeadzoneW;
+
+    if (state.powerW > deadzoneW) {
         state.powerState = PowerState::Charge;
         state.learnCycle = LearnCycle::Charge;
         return;
     }
 
-    if (state.powerW < -Config::POWER_DEADZONE_W) {
+    if (state.powerW < -deadzoneW) {
         state.powerState = PowerState::Discharge;
         state.learnCycle = LearnCycle::Discharge;
         return;
