@@ -49,7 +49,15 @@ namespace Config {
     // Если после прошивки логика окажется обратной, поменять на true.
     constexpr bool MOSFET_ACTIVE_HIGH = true;
 
-    constexpr float POWER_DEADZONE_W = 2.0f;
+    // Порог режима отвечает только за Charge/Discharge/Idle.
+    constexpr float POWER_STATE_DEADZONE_DEFAULT_W = 2.0f;
+    constexpr float POWER_STATE_DEADZONE_MIN_W = 0.0f;
+    constexpr float POWER_STATE_DEADZONE_MAX_W = 20.0f;
+
+    // Отдельный порог фактического интегрирования энергии в Wh/SoC.
+    constexpr float ENERGY_DEADZONE_DEFAULT_W = 0.05f;
+    constexpr float ENERGY_DEADZONE_MIN_W = 0.0f;
+    constexpr float ENERGY_DEADZONE_MAX_W = 2.0f;
 
     constexpr uint32_t SMALL_SCREEN_OFF_PREVIEW_MS = 2000;
     constexpr float AUTO_POWER_ON_MIN_CHARGE_W = 1.0f;
